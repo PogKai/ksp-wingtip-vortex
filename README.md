@@ -1,2 +1,23 @@
-# ksp-wingtip-vortex
-Realistic wingtip vortices for Kerbal Space Program that dynamically form under high lift conditions. The effect responds to G-force, airspeed, altitude, and wing size to produce smooth, physically inspired airflow trails behind aircraft.
+# KSP Wingtip Vortex Mod
+
+Realistic wingtip vortices for Kerbal Space Program based on aerodynamic behavior.
+
+## Features
+
+- Dynamic vortex generation based on lift conditions
+- Swirl behavior influenced by G-force
+- Scales with aircraft wing size
+- Smooth continuous particle trails
+- Optimized for performance and stability
+
+## Conditions
+
+Vortices are generated when:
+
+- Speed is at least 60 m/s and G-force is at least 3
+- OR speed is at least 250 m/s and altitude is above 20,000 meters
+
+## Installation
+
+1. Build the project in Release mode
+2. Copy the compiled `WingtipVortex.dll` into:

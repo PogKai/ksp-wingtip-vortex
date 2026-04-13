@@ -1,243 +1,292 @@
 ﻿using UnityEngine;
 using KSP;
-using System.Linq;
+using System.Collections;
 using System.Collections.Generic;
 
 [KSPAddon(KSPAddon.Startup.Flight, false)]
-public class WingtipVortexLoader : MonoBehaviour
+public class WingtipVortex : MonoBehaviour
 {
-    private Dictionary<Part, ParticleSystem> effects = new Dictionary<Part, ParticleSystem>();
-    private Dictionary<Part, Vector3> wingtipLocal = new Dictionary<Part, Vector3>();
-    private Dictionary<Part, float> emitAccumulator = new Dictionary<Part, float>();
+    private Vessel vessel;
 
-    private Vessel cachedVessel = null;
+    private List<TrailRenderer> trails = new List<TrailRenderer>();
+    private List<GameObject> trailObjs = new List<GameObject>();
+    private List<Transform> anchors = new List<Transform>();
+    private List<float> strengths = new List<float>();
+
+    private float currentIntensity = 0f;
+    private bool wasSpawning = false;
+
+    float buildSpeed = 2f;
+    float decaySpeed = 0.8f;
+
+    Vector3 smoothedFlow = Vector3.zero;
+
+    IEnumerator Start()
+    {
+        while (FlightGlobals.ActiveVessel == null || !FlightGlobals.ActiveVessel.loaded)
+            yield return null;
+
+        vessel = FlightGlobals.ActiveVessel;
+        FindVortexSources();
+    }
+
+    void FindVortexSources()
+    {
+        List<PartScore> allParts = new List<PartScore>();
+
+        foreach (Part p in vessel.parts)
+        {
+            if (!(p.Modules.Contains("ModuleLiftingSurface") ||
+                  p.Modules.Contains("ModuleControlSurface")))
+                continue;
+
+            Renderer r = p.GetComponentInChildren<Renderer>();
+            if (r == null) continue;
+
+            Vector3 local = vessel.transform.InverseTransformPoint(p.transform.position);
+
+            if (Mathf.Abs(local.x) < 0.3f)
+                continue;
+
+            float width = Mathf.Abs(local.x);
+            float forward = local.z;
+
+            float liftScore = r.bounds.size.x * r.bounds.size.z;
+
+            float upDot = Mathf.Abs(Vector3.Dot(p.transform.up, vessel.upAxis));
+            float orientationFactor = Mathf.Lerp(0.2f, 1f, upDot);
+
+            liftScore *= orientationFactor;
+
+            allParts.Add(new PartScore(p, width, forward, liftScore));
+        }
+
+        allParts.Sort((a, b) => b.lift.CompareTo(a.lift));
+
+        Part leftRear = null;
+        Part rightRear = null;
+
+        foreach (var p in allParts)
+        {
+            Vector3 local = vessel.transform.InverseTransformPoint(p.part.transform.position);
+
+            if (local.x < 0f && leftRear == null)
+                leftRear = p.part;
+
+            if (local.x > 0f && rightRear == null)
+                rightRear = p.part;
+
+            if (leftRear != null && rightRear != null)
+                break;
+        }
+
+        if (leftRear != null)
+            AddWingVortex(leftRear, false, 1f);
+
+        if (rightRear != null)
+            AddWingVortex(rightRear, true, 1f);
+
+        // --- Add front vortices (weaker) ---
+        allParts.Sort((a, b) => b.forward.CompareTo(a.forward));
+
+        Part leftFront = null;
+        Part rightFront = null;
+
+        foreach (var p in allParts)
+        {
+            Vector3 local = vessel.transform.InverseTransformPoint(p.part.transform.position);
+
+            if (local.x < 0f && leftFront == null && p.part != leftRear)
+                leftFront = p.part;
+
+            if (local.x > 0f && rightFront == null && p.part != rightRear)
+                rightFront = p.part;
+
+            if (leftFront != null && rightFront != null)
+                break;
+        }
+
+        if (leftFront != null)
+            AddWingVortex(leftFront, false, 0.4f);
+
+        if (rightFront != null)
+            AddWingVortex(rightFront, true, 0.4f);
+    }
+
+    void AddWingVortex(Part wing, bool isRight, float strength)
+    {
+        Transform anchor = CreateWingtipAnchor(wing, isRight);
+
+        if (anchor != null)
+            CreateTrail(anchor, strength);
+    }
+
+    void CreateTrail(Transform anchor, float strength)
+    {
+        GameObject obj = new GameObject("WingtipTrail");
+
+        TrailRenderer tr = obj.AddComponent<TrailRenderer>();
+        tr.time = 1.5f;
+        tr.startWidth = 0.15f;
+        tr.endWidth = 0.03f;
+        tr.material = new Material(Shader.Find("Legacy Shaders/Particles/Additive"));
+        tr.alignment = LineAlignment.View;
+        tr.enabled = false;
+        tr.emitting = false;
+
+        trailObjs.Add(obj);
+        trails.Add(tr);
+        anchors.Add(anchor);
+        strengths.Add(strength);
+    }
+
+    Transform CreateWingtipAnchor(Part wing, bool isRight)
+    {
+        MeshFilter mf = wing.GetComponentInChildren<MeshFilter>();
+        if (mf == null) return null;
+
+        Vector3[] vertices = mf.mesh.vertices;
+
+        Vector3 bestVertex = vertices[0];
+        float bestScore = float.MinValue;
+
+        foreach (var v in vertices)
+        {
+            Vector3 world = mf.transform.TransformPoint(v);
+            Vector3 vesselLocal = vessel.transform.InverseTransformPoint(world);
+
+            float score = vesselLocal.x * (isRight ? 1f : -1f);
+
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestVertex = v;
+            }
+        }
+
+        Vector3 bestWorld = mf.transform.TransformPoint(bestVertex);
+
+        GameObject anchor = new GameObject(isRight ? "RightWingtip" : "LeftWingtip");
+        anchor.transform.position = bestWorld;
+        anchor.transform.parent = wing.transform;
+
+        return anchor.transform;
+    }
 
     void Update()
     {
-        if (FlightGlobals.ActiveVessel == null) return;
+        if (vessel == null || !vessel.loaded) return;
 
-        Vessel vessel = FlightGlobals.ActiveVessel;
+        Vector3 velocity = vessel.srf_velocity;
+        float speed = velocity.magnitude;
 
-        if (cachedVessel != vessel)
+        if (speed < 1f)
         {
-            Cleanup();
-            cachedVessel = vessel;
+            DisableAllTrails();
+            return;
         }
 
-        var wings = vessel.parts
-            .Where(p => p.Modules.Contains("ModuleLiftingSurface"))
-            .ToList();
+        Vector3 flow = velocity.normalized;
 
-        if (wings.Count == 0) return;
+        float gForce = (float)vessel.geeForce;
+        float gCap = Mathf.Min(gForce, 15f); // cap at break point
 
-        Vector3 com = vessel.CoM;
-        Vector3 right = vessel.transform.right;
+        float targetIntensity = 0f;
 
-        Part left = null;
-        Part rightWing = null;
-
-        float minDot = float.MaxValue;
-        float maxDot = float.MinValue;
-
-        foreach (var wing in wings)
+        if (speed >= 60f && gCap >= 3f)
         {
-            float dot = Vector3.Dot(wing.transform.position - com, right);
+            float gFactor = Mathf.Clamp01((gCap - 3f) / 10f);
 
-            if (dot < minDot) { minDot = dot; left = wing; }
-            if (dot > maxDot) { maxDot = dot; rightWing = wing; }
+            // softer buildup curve
+            gFactor = Mathf.Pow(gFactor, 2f);
+
+            targetIntensity = Mathf.Min(gFactor, 0.9f); // prevent overdrive
         }
 
-        ProcessWing(left, vessel, -1);
-        ProcessWing(rightWing, vessel, 1);
-    }
+        bool isSpawning = targetIntensity > 0.02f;
 
-    void ProcessWing(Part wing, Vessel vessel, int sideSign)
-    {
-        if (wing == null) return;
-
-        EnsureEffect(wing);
-
-        if (!wingtipLocal.ContainsKey(wing))
-            wingtipLocal[wing] = FindWingtipLocal(wing, vessel.CoM);
-
-        Vector3 tip = wing.transform.TransformPoint(wingtipLocal[wing]);
-
-        Emit(wing, vessel, tip, sideSign);
-    }
-
-    void EnsureEffect(Part wing)
-    {
-        if (effects.ContainsKey(wing)) return;
-
-        GameObject obj = new GameObject("Vortex");
-
-        var ps = obj.AddComponent<ParticleSystem>();
-
-        var main = ps.main;
-        main.loop = false;
-        main.playOnAwake = false;
-        main.simulationSpace = ParticleSystemSimulationSpace.World;
-        main.startLifetime = 0.3f;
-        main.startSpeed = 0f;
-        main.startSize = 0.045f;
-        main.startColor = Color.white;
-        main.maxParticles = 50000;
-
-        var emission = ps.emission;
-        emission.enabled = false;
-
-        var renderer = ps.GetComponent<ParticleSystemRenderer>();
-        renderer.renderMode = ParticleSystemRenderMode.Billboard;
-        renderer.material = new Material(Shader.Find("Legacy Shaders/Particles/Alpha Blended"));
-
-        var col = ps.colorOverLifetime;
-        col.enabled = true;
-
-        Gradient grad = new Gradient();
-        grad.SetKeys(
-            new GradientColorKey[] {
-                new GradientColorKey(new Color(0.92f,0.92f,0.92f), 0f),
-                new GradientColorKey(new Color(0.7f,0.7f,0.7f), 0.5f),
-                new GradientColorKey(new Color(0.5f,0.5f,0.5f), 1f)
-            },
-            new GradientAlphaKey[] {
-                new GradientAlphaKey(0.95f, 0f),
-                new GradientAlphaKey(0.5f, 0.5f),
-                new GradientAlphaKey(0f, 1f)
-            }
-        );
-
-        col.color = new ParticleSystem.MinMaxGradient(grad);
-
-        effects[wing] = ps;
-        emitAccumulator[wing] = 0f;
-    }
-
-    void Emit(Part wing, Vessel vessel, Vector3 tip, int sideSign)
-    {
-        if (vessel.srf_velocity.sqrMagnitude < 0.01f) return;
-
-        float speed = (float)vessel.srfSpeed;
-        float g = (float)vessel.geeForce;
-        float density = (float)vessel.atmDensity;
-        float altitude = (float)vessel.altitude;
-
-        Vector3 airflow = -(Vector3)vessel.srf_velocity.normalized;
-
-        bool highG = speed >= 60f && g >= 3f;
-        bool highAlt = speed >= 250f && altitude >= 20000f;
-
-        if (!(highG || highAlt)) return;
-        if (density < 0.15f) return;
-
-        float intensity = Mathf.Clamp01((g - 1f) * 0.3f + (speed - 250f) / 200f);
-
-        var ps = effects[wing];
-
-        float particlesPerMeter = Mathf.Lerp(30f, 100f, intensity);
-        float rate = particlesPerMeter * speed;
-
-        emitAccumulator[wing] += rate * Time.deltaTime;
-
-        int count = Mathf.FloorToInt(emitAccumulator[wing]);
-        if (count <= 0) return;
-
-        emitAccumulator[wing] -= count;
-
-        float flowSpeed = speed * Mathf.Lerp(0.9f, 1.1f, intensity);
-        Vector3 baseVelocity = airflow * flowSpeed;
-
-        Vector3 side = Vector3.Cross(vessel.transform.up, airflow).normalized;
-        Vector3 ortho = Vector3.Cross(airflow, side).normalized;
-
-        float radius = Mathf.Lerp(0.003f, 0.01f, intensity);
-
-        for (int i = 0; i < count; i++)
+        // Reset system when vortices begin forming
+        if (isSpawning && !wasSpawning)
         {
-            ParticleSystem.EmitParams ep = new ParticleSystem.EmitParams();
+            currentIntensity = 0f;
+            smoothedFlow = velocity.normalized;
 
-            // SMALL OFFSET ONLY (no ring spawning)
-            Vector3 offset =
-                side * Random.Range(-radius, radius) +
-                ortho * Random.Range(-radius, radius);
-
-            ep.position = tip + offset;
-
-            // 🔥 REAL delayed swirl (fixes cone)
-
-            // swirl starts weak near wing, grows naturally downstream
-            float swirlStrength = Mathf.Lerp(0.2f, 8f, intensity);
-
-            // initial swirl dampening (this is the delay effect)
-            swirlStrength *= 0.15f;
-
-            // radial direction
-            Vector3 radial = offset.sqrMagnitude > 0.0001f
-                ? offset.normalized
-                : side;
-
-            // tangential rotation
-            Vector3 tangential = Vector3.Cross(airflow, radial).normalized;
-
-            // centripetal pull (keeps vortex tight)
-            float coreTightness = Mathf.Lerp(3f, 12f, intensity);
-            Vector3 centripetal = -radial * coreTightness;
-
-            ep.velocity =
-                baseVelocity +
-                tangential * swirlStrength * sideSign +
-                centripetal;
-
-            ep.startLifetime = Mathf.Lerp(0.2f, 0.35f, intensity);
-            ep.startSize = Mathf.Lerp(0.04f, 0.065f, intensity);
-
-            ep.startColor = Color.Lerp(
-                new Color(0.6f, 0.6f, 0.6f),
-                Color.white,
-                Mathf.InverseLerp(3f, 7f, g)
-            );
-
-            ps.Emit(ep, 1);
-        }
-    }
-
-    Vector3 FindWingtipLocal(Part wing, Vector3 com)
-    {
-        Vector3 best = Vector3.zero;
-        float bestDist = 0f;
-
-        foreach (var mf in wing.FindModelComponents<MeshFilter>())
-        {
-            if (mf.sharedMesh == null) continue;
-
-            foreach (var v in mf.sharedMesh.vertices)
+            for (int i = 0; i < trails.Count; i++)
             {
-                Vector3 wp = mf.transform.TransformPoint(v);
-                float d = (wp - com).sqrMagnitude;
-
-                if (d > bestDist)
-                {
-                    bestDist = d;
-                    best = wing.transform.InverseTransformPoint(wp);
-                }
+                trails[i].Clear();
+                trailObjs[i].transform.position = anchors[i].position - smoothedFlow * 0.5f;
+                trails[i].emitting = false;
+                trails[i].enabled = false;
             }
         }
 
-        return best;
+        wasSpawning = isSpawning;
+
+        if (targetIntensity > currentIntensity)
+            currentIntensity = Mathf.MoveTowards(currentIntensity, targetIntensity, buildSpeed * Time.deltaTime);
+        else
+            currentIntensity = Mathf.MoveTowards(currentIntensity, targetIntensity, decaySpeed * Time.deltaTime);
+
+        for (int i = 0; i < trails.Count; i++)
+        {
+            var tr = trails[i];
+            var obj = trailObjs[i];
+            var anchor = anchors[i];
+
+            float visible = Mathf.Clamp01(currentIntensity) * strengths[i];
+
+            if (visible <= 0.01f)
+            {
+                // allow smooth decay instead of instant removal
+                tr.emitting = false;
+                tr.enabled = true;
+                continue;
+            }
+
+            // Incremental movement instead of snapping (fixes flow break)
+            Vector3 move = flow * speed * Time.deltaTime * 0.5f;
+
+            // Ensure it starts near anchor but then flows naturally
+            if (Vector3.Distance(obj.transform.position, anchor.position) > 2.0f)
+            {
+                obj.transform.position = anchor.position - flow * 0.5f;
+            }
+            else
+            {
+                obj.transform.position += move;
+            }
+
+            tr.enabled = true;
+            tr.emitting = true;
+            tr.startWidth = 0.15f * visible;
+            tr.time = Mathf.Lerp(0.8f, 3.0f, visible);
+            tr.transform.forward = flow;
+        }
     }
 
-    void Cleanup()
+    void DisableAllTrails()
     {
-        foreach (var ps in effects.Values)
-            if (ps != null) Destroy(ps.gameObject);
-
-        effects.Clear();
-        wingtipLocal.Clear();
-        emitAccumulator.Clear();
+        for (int i = 0; i < trails.Count; i++)
+        {
+            trails[i].emitting = false;
+            trails[i].enabled = false;
+            trails[i].Clear();
+        }
     }
 
-    void OnDestroy()
+    private class PartScore
     {
-        Cleanup();
+        public Part part;
+        public float width;
+        public float forward;
+        public float lift;
+
+        public PartScore(Part p, float w, float f, float l)
+        {
+            part = p;
+            width = w;
+            forward = f;
+            lift = l;
+        }
     }
 }

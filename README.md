@@ -1,43 +1,43 @@
 # KSP Wingtip Vortex Mod
 
-Realistic wingtip vortices for Kerbal Space Program based on aerodynamic behavior.
+Adds wingtip vortices to aircraft in Kerbal Space Program.
 
 ---
 
 ## Overview
 
-This mod adds dynamic wingtip vortices to aircraft in KSP1. The system reacts to speed, altitude, and G-force, switching between different rendering methods to maintain both realism and performance.
+This mod generates wingtip vortices that react to how you’re flying. It switches between trail-based vortices at lower speeds and line-based vortices at higher speeds so things stay stable and don’t fall apart visually.
 
 ---
 
 ## Features
 
-* Dynamic vortex generation based on G-force and flight conditions
-* Dual rendering system:
+* Vortices respond to G-force and flight conditions
+* Two rendering modes:
 
-  * Trail vortices at low speed / low altitude
-  * Line vortices at high speed / high altitude
-* Curved high-speed vortices that respond to pitch and roll
-* Front vortices appear later than rear vortices
-* Smooth buildup and fade-out (no popping)
-* Natural dissipation at low speeds
-* Always maintains exactly 4 vortices
-* Optimized for performance and stability
+  * Trails at low speed / low altitude
+  * Lines at high speed / high altitude
+* High-speed vortices curve with pitch and roll
+* Front vortices show up later than the rear ones
+* Smooth fade in and out (no popping)
+* Trails dissipate naturally instead of snapping back
+* Always keeps exactly 4 vortices
+* Built to stay stable at high speeds
 
 ---
 
 ## Requirements
 
-* Kerbal Space Program 1 (KSP1)
-* No external dependencies
+* Kerbal Space Program 1
+* No dependencies
 
 ---
 
 ## Compatibility
 
 * Works with most aircraft and lifting surfaces
-* Designed for stock aerodynamics
-* Should be compatible with most visual mods
+* Built around stock aero
+* Should work fine alongside most visual mods
 
 ---
 
@@ -49,80 +49,79 @@ Drop into GameData/
 
 ## How It Works
 
-Vortices are generated dynamically based on flight behavior:
+Vortices are driven mainly by G-force:
 
-* Increase with **G-force**
-* Stronger during turns and aggressive maneuvers
-* Fade out naturally when G’s decrease
+* More G’s → stronger vortices
+* Turns and aggressive maneuvers bring them out
+* They fade out as G’s drop
 
 ### Rendering Modes
 
 **Trail Mode (Low Speed / Low Altitude)**
 
-* Active below ~165 m/s and below ~4,000 m
-* Produces smooth, dissipating airflow trails
+* Below ~165 m/s and ~4,000 m
+* Smooth, dissipating trails
 
 **Line Mode (High Speed / High Altitude)**
 
-* Activates above ~180 m/s or above ~8,000 m
+* Above ~180 m/s or ~8,000 m
+* Clean, curved streaks
 
-* Produces stable, curved vortex streaks
-
-* Switching is latched to prevent flickering or instability
+The switch between modes is latched so it doesn’t flicker around the threshold.
 
 ---
 
 ## Controls
 
-* No user controls
-* Fully automatic based on flight conditions
+* None
+* Everything is automatic
 
 ---
 
 ## Performance
 
-* Uses TrailRenderer at low speeds for visual quality
-* Uses LineRenderer at high speeds for performance
-* Designed to minimize impact during high-speed flight
+* Trails used where they look best
+* Lines used where trails would break
+* Keeps things stable at high speed
 
 ---
 
 ## Known Bugs
 
-* Minor visual artifacts during very rapid speed or G-force changes
-* Transition zone (~165–180 m/s) can feel abrupt in edge cases
-* Line curvature may look exaggerated on very small aircraft
-* Vortices may linger slightly longer than expected at very low speeds
-* Extreme maneuvers (high roll + high G + rapid deceleration) can cause brief glitches
+* Can still get minor visual issues if speed/G’s change very quickly
+* The ~165–180 m/s range can feel a bit abrupt sometimes
+* Line curvature can look off on very small aircraft
+* Vortices may hang around slightly longer at very low speeds
+* Extreme maneuvers (high roll + high G + rapid slowdown) can cause brief glitches
 
 ---
 
 ## Troubleshooting
 
-**Vortices not appearing**
+**No vortices showing**
 
-* Ensure aircraft has lifting/control surfaces
-* Check that speed and G-force conditions are being met
+* Make sure your craft actually has lifting/control surfaces
+* Make sure you're fast enough or pulling enough G’s
 
-**Strange visuals during transitions**
+**Weird visuals during transitions**
 
-* This can happen during rapid flight changes
-* Usually stabilizes quickly once conditions settle
+* Usually happens during rapid changes
+* Should settle on its own quickly
 
 ---
 
-## Roadmap / Future Plans
+## Roadmap
 
-* Improved vortex curl / spiral behavior
+* Improve curl / spiral behavior
 * Better dissipation visuals
-* Additional tuning for edge cases
-* Squish more bugs (make transition from trail render to trace render seamless as trail render can't handle high speeds)
+* More tuning around edge cases
+* Clean up remaining transition issues
 
 ---
 
 ## License
 
-MIT (or your preferred license)
+MIT
 
 ---
 
@@ -135,3 +134,5 @@ PogKai
 ## Version
 
 v0.3.0
+
+Link to KSP Forum post: https://forum.kerbalspaceprogram.com/topic/230208-ksp-vorticescontrails-mod-release/#comment-4508713

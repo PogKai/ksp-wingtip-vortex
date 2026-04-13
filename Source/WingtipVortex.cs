@@ -17,16 +17,13 @@ public class WingtipVortex : MonoBehaviour
     private List<float> strengths = new List<float>();
     private List<float> areas = new List<float>();
 
-    // history for curvature
     private List<Queue<Vector3>> lineHistory = new List<Queue<Vector3>>();
     private int historyLength = 8;
 
-    // track trail activation state for reset
     private List<bool> trailWasActive = new List<bool>();
     private List<bool> lineWasActive = new List<bool>();
 
     private bool useLineMode = false;
-
     private float currentIntensity = 0f;
 
     float buildSpeed = 2f;
@@ -173,7 +170,6 @@ public class WingtipVortex : MonoBehaviour
 
         float intensity = currentIntensity;
 
-        // latched mode switching to prevent shredded transitions near threshold
         bool shouldEnterLineMode = speed >= 180f || altitude >= 8000f;
         bool shouldExitLineMode = speed <= 165f && altitude <= 4000f && g <= 3.1f;
 
@@ -194,17 +190,22 @@ public class WingtipVortex : MonoBehaviour
             var history = lineHistory[i];
 
             float visible = intensity * strengths[i];
-            if (strengths[i] < 1f && g < 4.2f) visible *= Mathf.Clamp01((g - 3.5f) / 0.7f); // smooth fade instead of cutoff
+            if (strengths[i] < 1f && g < 4.2f) visible *= Mathf.Clamp01((g - 3.5f) / 0.7f);
+
+            // FORCE visibility gradually at high altitude (no G or speed required)
+            if (altitude >= 8000f)
+            {
+                float altBlend = Mathf.Clamp01((altitude - 8000f) / 4000f); // ramps from 8k → 12k
+                float forcedVis = Mathf.Lerp(0.1f, 0.5f, altBlend);
+                visible = Mathf.Max(visible, forcedVis);
+            }
 
             Vector3 currentPoint = anchor.position;
 
-            // update history for curvature
             history.Enqueue(currentPoint);
             if (history.Count > historyLength) history.Dequeue();
 
-            // position handling (baseline behavior)
             float cappedSpeed = Mathf.Min(speed, 180f);
-            Vector3 move = flow * cappedSpeed * Time.deltaTime * 0.2f;
 
             if (Vector3.Distance(obj.transform.position, anchor.position) > 1.5f)
             {
@@ -216,18 +217,13 @@ public class WingtipVortex : MonoBehaviour
                 obj.transform.position = Vector3.Lerp(obj.transform.position, targetPos, Time.deltaTime * 4f);
             }
 
-            // --- TRAIL ---
             bool shouldUseLine = useLineMode && visible > 0.01f;
             bool shouldUseTrail = !useLineMode && visible > 0.01f;
 
-            // baseline fade behavior (no extra scaling)
-
             if (shouldUseTrail)
             {
-                // HARD SWITCH: disable line completely when trail is active
                 lr.enabled = false;
 
-                // RESET when switching from LINE -> TRAIL (fix stuck at wingtip)
                 if (lineWasActive[i])
                 {
                     tr.Clear();
@@ -235,7 +231,6 @@ public class WingtipVortex : MonoBehaviour
                     obj.transform.position = anchor.position - flow * 0.5f;
                 }
 
-                // also reset on first activation
                 if (!trailWasActive[i])
                 {
                     tr.Clear();
@@ -253,16 +248,13 @@ public class WingtipVortex : MonoBehaviour
             }
             else
             {
-                // allow natural dissipation instead of snapping off
                 tr.emitting = false;
                 tr.enabled = true;
                 trailWasActive[i] = false;
             }
 
-            // --- CURVED LINE ---
             if (shouldUseLine)
             {
-                // HARD SWITCH: only enable if trail is NOT active
                 lr.enabled = true;
 
                 if (trailWasActive[i])
@@ -273,31 +265,73 @@ public class WingtipVortex : MonoBehaviour
                     history.Clear();
                 }
 
+                int dynamicLength = historyLength;
+                if (lr.positionCount != dynamicLength)
+                    lr.positionCount = dynamicLength;
+
                 int idx = 0;
-
-                // perpendicular direction for curl (based on aircraft orientation)
                 Vector3 perp = Vector3.Cross(flow, vessel.upAxis).normalized;
-
-                // determine left/right side for opposite curl directions
                 float sideSign = Mathf.Sign(vessel.transform.InverseTransformPoint(anchor.position).x);
+                float cruiseFactor = Mathf.Clamp01((altitude - 8000f) / 8000f);
+                float lengthScale = Mathf.Lerp(1.0f, 4.0f, Mathf.Clamp01(speed / 300f));
 
                 foreach (var point in history)
                 {
-                    // base backward offset
-                    Vector3 offset = -flow * (idx * 1.5f);
+                    Vector3 offset = -flow * (idx * 1.5f * lengthScale);
 
-                    // add curvature (increases further down the line)
                     float curveStrength = 0.3f * visible;
                     float curve = curveStrength * idx * idx * 0.15f;
-
                     Vector3 curvedOffset = perp * curve * sideSign;
 
-                    lr.SetPosition(idx, point + offset + curvedOffset);
+                    float warpAmp = Mathf.Lerp(0.0f, 1.2f, cruiseFactor) * visible;
+                    float warpFreq = Mathf.Lerp(0.5f, 1.5f, cruiseFactor);
+                    float warp = Mathf.Sin(idx * 0.4f + Time.time * warpFreq) * warpAmp;
+                    Vector3 warpOffset = perp * warp;
+
+                    float seed = (i + 1) * 13.37f + idx * 7.91f;
+                    float phaseOffset = seed * 0.37f;
+                    float ampJitter = 0.75f + 0.5f * Mathf.PerlinNoise(seed, Time.time * 0.2f);
+                    float freqJitter = 0.85f + 0.3f * Mathf.PerlinNoise(seed * 0.5f, Time.time * 0.15f);
+
+                    float helixRadius = Mathf.Lerp(0.05f, 0.25f, cruiseFactor) * visible * ampJitter;
+                    float helixSpeed = Mathf.Lerp(1.0f, 2.5f, cruiseFactor) * freqJitter;
+                    float angle = Time.time * helixSpeed + idx * 0.6f + phaseOffset;
+
+                    Vector3 helixOffset = perp * Mathf.Sin(angle) * helixRadius
+                                         + vessel.upAxis * Mathf.Cos(angle) * helixRadius * 0.6f;
+
+                    // ensure visible motion at cruise
+                    float falloff = Mathf.Clamp01(idx / (float)historyLength);
+
+                    // boost motion so it is always noticeable
+                    float motionBoost = Mathf.Lerp(0.3f, 1.2f, cruiseFactor);
+
+                    Vector3 motion = (warpOffset + helixOffset) * falloff * motionBoost;
+
+                    lr.SetPosition(idx, point + offset + curvedOffset + motion);
                     idx++;
                 }
 
-                lr.startWidth = 0.15f * visible * lineFade;
-                lr.endWidth = 0.03f * visible * lineFade;
+                float strengthFactor = strengths[i];
+                lr.startWidth = 0.15f * visible * lineFade * strengthFactor;
+                lr.endWidth = 0.03f * visible * lineFade * strengthFactor;
+
+                // smooth fade-out along line (prevents ribbon cutoff)
+                Gradient lineGrad = new Gradient();
+                lineGrad.SetKeys(
+                    new GradientColorKey[] {
+                        new GradientColorKey(Color.white, 0f),
+                        new GradientColorKey(new Color(0.8f,0.8f,0.8f), 0.5f),
+                        new GradientColorKey(new Color(0.6f,0.6f,0.6f), 1f)
+                    },
+                    new GradientAlphaKey[] {
+                        new GradientAlphaKey(visible * strengthFactor, 0f),
+                        new GradientAlphaKey(visible * strengthFactor * 0.6f, 0.4f),
+                        new GradientAlphaKey(visible * strengthFactor * 0.2f, 0.7f),
+                        new GradientAlphaKey(0f, 1f)
+                    }
+                );
+                lr.colorGradient = lineGrad;
 
                 lineWasActive[i] = true;
             }

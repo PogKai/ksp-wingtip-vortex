@@ -163,7 +163,7 @@ public class WingtipVortexLoader : MonoBehaviour
 
             ep.position = tip + offset;
 
-            // 🔥 REAL delayed swirl (fixes cone)
+            // delayed swirl (fixes cone)
 
             // swirl starts weak near wing, grows naturally downstream
             float swirlStrength = Mathf.Lerp(0.2f, 8f, intensity);

@@ -28,7 +28,6 @@ This mod generates wingtip vortices that react to how you’re flying. It switch
 
 ## Requirements
 
-* Kerbal Space Program 1
 * No dependencies
 
 ---

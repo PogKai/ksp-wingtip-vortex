@@ -19,5 +19,5 @@ Vortices are generated when:
 
 ## Installation
 
-1. Build the project in Release mode
-2. Copy the compiled `WingtipVortex.dll` into:
+1. Download the latest release
+2. Extract into your KSP directory

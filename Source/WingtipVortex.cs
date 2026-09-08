@@ -6,7 +6,7 @@ using System.Collections.Generic;
 [KSPAddon(KSPAddon.Startup.Flight, false)]
 public class WingtipVortex : MonoBehaviour
 {
-    public const string ModVersion = "1.0.0";
+    public const string ModVersion = "1.0.1";
 
     private static Material sharedTrailMat;
     private static Material sharedLineMat;
@@ -203,6 +203,34 @@ public class WingtipVortex : MonoBehaviour
     private float contrailTempWarm = 253f;   // K: above this, no persistent contrail
     private float contrailTempCold = 233f;   // K: at or below this, fully developed
     private float contrailBandMin = 12f;     // K: never let the band collapse to a step
+
+    // ILLUMINATION. Condensation has nothing luminous about it: a contrail is visible only
+    // because it SCATTERS SUNLIGHT. So the light term is not decoration, it is the whole reason
+    // the effect is visible at all, and three things were wrong with how it was applied.
+    //
+    // 1. The contrail floor bypassed it. The floor is applied with Max(), so high-altitude wakes
+    //    stayed at full brightness on the night side while every other path correctly went dim.
+    //
+    // 2. It was never normalised. Dividing solar flux by a hard-coded 2000 is wrong twice over:
+    //    Kerbin's daylight flux is about 1360, so full noon only ever reached 0.68 and the effect
+    //    never reached its own top end anywhere — and the same constant pins Duna (~600) at
+    //    0.30 for no physical reason while Eve (~2500) clamps flat. Normalising against the
+    //    UNOCCLUDED flux at the vessel's own distance from the star makes 1.0 mean "full
+    //    daylight" on every body, which is what body-relative means here.
+    //
+    // 3. The floor is not really about physics. The wake material is additive, so it ADDS light
+    //    to whatever is behind it — the same alpha reads far brighter against a black sky than
+    //    against a bright one, and a wake tuned to look right at noon looks like a neon tube at
+    //    midnight. That is the real reason night needs its own term, and why the floor is not
+    //    zero either: planetshine and starlight are not nothing, and a wake that vanished
+    //    outright would read as a bug.
+    //
+    // vessel.solarFlux already accounts for occlusion by the body, so this keeps the good case
+    // for free: a craft at altitude still sees the sun after the ground below it has gone dark,
+    // which is exactly when real contrails are at their most striking.
+    private float nightFloorScale = 0.20f;   // ambient floor in full shadow
+    private float dayLightScale = 0.75f;     // brightness in full daylight; 1.0 for no dimming
+    private bool loggedSunFlux = false;
     private CelestialBody contrailBody = null;
     private float bodyContrailWarm = 253f, bodyContrailCold = 233f;
     private float contrailTimeMin = 2.5f;          // trail lifetime at the bottom of the band
@@ -558,6 +586,19 @@ public class WingtipVortex : MonoBehaviour
     //
     // A stock install has nothing that does this, which is exactly why it survived testing.
     private float maxPartExtent = 200f;   // metres: far above any real part, far below the garbage
+
+    // SECOND-TIER CONTAMINATION. maxPartExtent catches the 1e18 cull-defeating quads, but not the
+    // merely-large: engine plumes, reentry effects and similar visual meshes are tens of metres
+    // and sail straight through a 200 m cap. On a modded install that inflated a 17 m fighter to
+    // a "46 m long, 44 m tall" airframe — see ComputeVesselAxes for why near-equal length and
+    // height is so much worse than simply being wrong.
+    //
+    // Colliders are the discriminator. Effect meshes have none: they are visual only. So a
+    // renderer is checked against its own part's PHYSICAL extent, which cannot be inflated.
+    // Only applied to renderers already large in absolute terms, so ordinary part geometry on a
+    // stock install is never second-guessed.
+    private float rendererColliderCheck = 5f;   // metres: below this, no collider test at all
+    private float rendererColliderSlack = 3f;   // allowed multiple of the part's collider size
     private bool boundsLogged = false;
     private bool rogueRendererLogged = false;
 
@@ -566,15 +607,53 @@ public class WingtipVortex : MonoBehaviour
     // while the anchor has genuinely just travelled a full frame at the old speed.
     private float lastRbSpeed = 0f;
 
+    // VESSEL READINESS. Source detection runs ONCE, and every anchor it places is measured
+    // against the airframe as it stands at that moment — so it has to run against an airframe
+    // that has finished being built. "loaded" is not that test: on a scene load the vessel is
+    // loaded while still PACKED, with its parts not yet at their flight positions.
+    //
+    // ComputeVesselAxes resolves the length axis by comparing bounds extents along two candidate
+    // directions, so a bounds read mid-settle can resolve the WRONG axis — and that is the
+    // failure this file already documents at length as the one that puts canard anchors at wing
+    // roots. Detection then bakes it in permanently.
+    private float sourceReadyTimeout = 30f;   // seconds; start anyway rather than never starting
+    private int sourceSettleFrames = 5;       // physics frames to let part positions settle
+    private float sourceConfirmDelay = 3f;    // see the confirmation pass in Start()
+
     IEnumerator Start()
     {
-        while (FlightGlobals.ActiveVessel == null || !FlightGlobals.ActiveVessel.loaded)
+        // See sourceReadyTimeout. Waiting on `loaded` alone was the bug behind "Revert to Launch
+        // moves the wingtip anchors, and only recovering and respawning puts them back": a revert
+        // restores a cached scene and comes up faster than a fresh launch, so this coroutine won
+        // the race and measured a vessel that was loaded but still packed. Wrong bounds, wrong
+        // length axis, wrong tips — baked in for the rest of the flight, because detection
+        // never runs again.
+        float waited = 0f;
+        while (waited < sourceReadyTimeout)
+        {
+            Vessel v = FlightGlobals.ActiveVessel;
+            if (FlightGlobals.ready && v != null && v.loaded && !v.packed
+                && v.rootPart != null && v.parts != null && v.parts.Count > 0)
+                break;
+            waited += Time.unscaledDeltaTime;
             yield return null;
+        }
+
+        // Unpacked is necessary but not sufficient: KSP settles part positions over the following
+        // physics frames, and it is those transforms the tip search reads.
+        for (int f = 0; f < sourceSettleFrames; f++)
+            yield return new WaitForFixedUpdate();
 
         vessel = FlightGlobals.ActiveVessel;
+        if (vessel == null || !vessel.loaded)
+        {
+            Debug.Log($"[VORTEX] no ready vessel after {waited:F1}s — not starting");
+            yield break;
+        }
         vesselTransform = vessel.transform;
 
-        Debug.Log($"[VORTEX] WingtipVortex v{ModVersion} starting");
+        Debug.Log($"[VORTEX] WingtipVortex v{ModVersion} starting "
+                  + $"(vessel ready after {waited:F1}s, packed={vessel.packed})");
 
         if (sharedTrailMat == null)
             sharedTrailMat = new Material(Shader.Find("Legacy Shaders/Particles/Additive"));
@@ -585,6 +664,55 @@ public class WingtipVortex : MonoBehaviour
         FindVortexSources();
 
         GameEvents.onFloatingOriginShift.Add(OnFloatingOriginShift);
+
+        // CONFIRMATION PASS. The wait above should be enough on its own, but it is a timing gate
+        // and timing gates are exactly the kind of thing that holds on one install and not on
+        // another — a slow modded load, or a part whose mesh is still being resized by
+        // something like procedural wings. Detecting once means any miss is permanent, and the
+        // player's only recourse was to recover and respawn.
+        //
+        // So detection is simply run a second time a few seconds later, which costs one extra
+        // pass per flight and makes a mistimed first pass self-healing. Gated on the craft still
+        // being on the ground, so it can never interrupt a wake that is already being drawn: that
+        // is also precisely the situation the bug appears in, since a revert puts you back on the
+        // runway.
+        if (vessel.LandedOrSplashed)
+        {
+            yield return new WaitForSeconds(sourceConfirmDelay);
+            if (vessel != null && vessel.loaded && !vessel.packed && vessel.LandedOrSplashed)
+            {
+                Debug.Log("[VORTEX] confirmation re-detect (still on the ground)");
+                ClearSources();
+                ComputeVesselBounds();
+                FindVortexSources();
+            }
+        }
+    }
+
+    // Tears down every per-source object and the parallel lists that index them. Shared by
+    // OnDestroy and the confirmation pass, so the two can never fall out of step as sources
+    // gain new per-source state.
+    void ClearSources()
+    {
+        for (int i = 0; i < ribbons.Count; i++)
+        {
+            if (ribbons[i] == null) continue;
+            if (ribbons[i].mesh != null) Destroy(ribbons[i].mesh);
+            if (ribbons[i].obj != null) Destroy(ribbons[i].obj);
+        }
+        for (int i = 0; i < trailObjs.Count; i++)
+            if (trailObjs[i] != null) Destroy(trailObjs[i]);
+        for (int i = 0; i < anchors.Count; i++)
+            if (anchors[i] != null) Destroy(anchors[i].gameObject);
+
+        ribbons.Clear(); trailObjs.Clear(); anchors.Clear();
+        trails.Clear(); lines.Clear();
+        strengths.Clear(); spanRatios.Clear();
+        lineHistory.Clear();
+        trailWasActive.Clear(); lineWasActive.Clear();
+        lastFlows.Clear(); lastAnchorPositions.Clear();
+        shedHistory.Clear(); trailAges.Clear(); trailHeadAges.Clear();
+        shedWrite = 0;
     }
 
     void OnDestroy()
@@ -594,21 +722,7 @@ public class WingtipVortex : MonoBehaviour
         // The vortex objects are deliberately unparented so recorded trail geometry stays in world
         // space — which also means nothing else in the scene ever cleans them up. Without this,
         // every Flight scene load left a full set behind, still holding geometry, forever.
-        for (int i = 0; i < ribbons.Count; i++)
-        {
-            if (ribbons[i] == null) continue;
-            if (ribbons[i].mesh != null) Destroy(ribbons[i].mesh);
-            if (ribbons[i].obj != null) Destroy(ribbons[i].obj);
-        }
-        ribbons.Clear();
-
-        for (int i = 0; i < trailObjs.Count; i++)
-            if (trailObjs[i] != null) Destroy(trailObjs[i]);
-        trailObjs.Clear();
-
-        for (int i = 0; i < anchors.Count; i++)
-            if (anchors[i] != null) Destroy(anchors[i].gameObject);
-        anchors.Clear();
+        ClearSources();
     }
 
     // KSP's FloatingOrigin has no hook for TrailRenderer — its recorded vertices are baked
@@ -767,6 +881,23 @@ public class WingtipVortex : MonoBehaviour
     // hidden: on a big wing the lateral term dominates every distance it appears in. Give it a
     // short surface mounted far off-centre — a nose canard — and the mis-assigned axis takes
     // over. See TryFindTipVertex for exactly how that lands the anchor on the leading edge root.
+    // Spread of PART POSITIONS along a world direction. Immune to renderer contamination, which
+    // is exactly what the axis comparison needs.
+    float PartSpread(Vector3 dir)
+    {
+        if (vessel == null || vessel.parts == null) return 0f;
+        float lo = float.MaxValue, hi = float.MinValue;
+        for (int i = 0; i < vessel.parts.Count; i++)
+        {
+            var p = vessel.parts[i];
+            if (p == null || p.transform == null) continue;
+            float d = Vector3.Dot(p.transform.position - vesselTransform.position, dir);
+            if (d < lo) lo = d;
+            if (d > hi) hi = d;
+        }
+        return (hi >= lo) ? (hi - lo) : 0f;
+    }
+
     void ComputeVesselAxes()
     {
         // Trusted: the tip scan already locates wingtips with it.
@@ -774,9 +905,31 @@ public class WingtipVortex : MonoBehaviour
 
         // An aircraft is longer nose-to-tail than it is deep, so the airframe's own extent picks
         // the axis regardless of how the root part happens to be oriented.
-        axLengthLocal = ExtentAlong(vesselBounds, vesselTransform.forward) >= ExtentAlong(vesselBounds, vesselTransform.up)
-            ? Vector3.forward
-            : Vector3.up;
+        //
+        // Measured from PART POSITIONS, not from vesselBounds, and that distinction is the whole
+        // fix for "reverting to launch moves the wingtip anchors". vesselBounds is built from
+        // renderers, so any effect mesh that survives the filter inflates it — and it inflates
+        // fore/aft and vertical together. A 17 m fighter measured 46.3 m long and 44.1 m tall,
+        // a margin of 5%, which makes this comparison a coin flip decided by whichever effect
+        // renderers happened to be enabled on that particular scene load. Flip it and the frame's
+        // length and height axes swap, so the tip search's "most forward vertex" pass becomes
+        // "highest vertex" and every anchor moves. Detection runs once, so it stays moved.
+        //
+        // Part transforms are airframe by definition and cannot be inflated by anything. They
+        // understate absolute extent (a wing panel's origin sits at its inboard node), but this
+        // only needs the COMPARISON, and for that they are strictly better. On the same craft
+        // they give roughly 16 m against 3 m: a 5:1 margin instead of 1.05:1.
+        float fwdSpread = PartSpread(vesselTransform.forward);
+        float upSpread = PartSpread(vesselTransform.up);
+        bool haveSpread = (fwdSpread + upSpread) > 0.01f;
+        if (!haveSpread)
+        {
+            fwdSpread = ExtentAlong(vesselBounds, vesselTransform.forward);
+            upSpread = ExtentAlong(vesselBounds, vesselTransform.up);
+        }
+        // Ties go to forward. An aircraft that genuinely measures as tall as it is long is not a
+        // shape this can resolve, and forward is right far more often.
+        axLengthLocal = (fwdSpread >= upSpread * 0.95f) ? Vector3.forward : Vector3.up;
 
         // Which way along it is the nose. No transform axis answers that, but a command pod does:
         // cockpits and probe cores sit ahead of the airframe's centre on essentially every aircraft.
@@ -789,13 +942,35 @@ public class WingtipVortex : MonoBehaviour
             podZ += Vector3.Dot(p.transform.position - vesselTransform.position, axLength);
             podCount++;
         }
+
+        // Reference point is the PART CENTROID, not vesselBounds.center, for the same reason the
+        // axis choice above no longer reads bounds — and this one is the more dangerous of the
+        // two. An effect mesh trailing behind the engines drags the bounds centre aft; carry it
+        // past the cockpit and the nose direction INVERTS. The tip search's second pass then
+        // takes the most REARWARD vertex instead of the most forward one, so every anchor jumps
+        // to the opposite edge of the wing. That is a flip with no visual warning and it lands
+        // wherever the contamination happened to sit on that particular scene load, which is
+        // exactly the "revert to launch moves the anchors" report.
+        Vector3 centroid = Vector3.zero;
+        int nParts = 0;
+        for (int i = 0; i < vessel.parts.Count; i++)
+        {
+            var p = vessel.parts[i];
+            if (p == null || p.transform == null) continue;
+            centroid += p.transform.position;
+            nParts++;
+        }
+        float bodyZ = (nParts > 0)
+            ? Vector3.Dot((centroid / nParts) - vesselTransform.position, axLength)
+            : Vector3.Dot(vesselBounds.center - vesselTransform.position, axLength);
+
         if (podCount > 0)
         {
             podZ /= podCount;
-            float bodyZ = Vector3.Dot(vesselBounds.center - vesselTransform.position, axLength);
             if (podZ < bodyZ) axLengthLocal = -axLengthLocal;
             axLengthSigned = true;
         }
+        float noseMargin = podZ - bodyZ;
 
         // Vertical completes the frame. Signed against the planet: source selection runs with the
         // aircraft sitting on the runway, so "away from the body" is the aircraft's own up.
@@ -806,10 +981,15 @@ public class WingtipVortex : MonoBehaviour
 
         // All three full extents. The previous line printed length as a HALF extent next to two
         // full ones, which made a 9.4 m fuselage read as 4.7 m against an 8.9 m height.
+        // Part spread is printed alongside, because it is what actually chose the axis and a
+        // small margin there is the signature of the bug this replaced.
         Debug.Log($"[VORTEX] axes resolved — nose={(axLengthSigned ? "known" : "UNKNOWN")} " +
                   $"length={ExtentAlong(vesselBounds, axLength) * 2f:F1}m " +
                   $"span={ExtentAlong(vesselBounds, axLateral) * 2f:F1}m " +
-                  $"height={ExtentAlong(vesselBounds, axVert) * 2f:F1}m");
+                  $"height={ExtentAlong(vesselBounds, axVert) * 2f:F1}m " +
+                  $"(part spread fwd={fwdSpread:F1}m up={upSpread:F1}m"
+                  + (haveSpread ? "" : ", FALLBACK to bounds")
+                  + $", nose margin={noseMargin:F1}m)");
     }
 
     // World -> vessel frame as (lateral, vertical, forward), so the geometry code below can keep
@@ -860,12 +1040,38 @@ public class WingtipVortex : MonoBehaviour
                   + $"rho_ASL {body.atmDensityASL:F3}");
     }
 
+    // A part's real PHYSICAL extent, from its colliders. Visual-only meshes have no collider, so
+    // this is a measure of the part that effect geometry cannot inflate.
+    bool TryGetColliderBounds(Part p, out Bounds bounds)
+    {
+        bounds = new Bounds();
+        if (p == null) return false;
+
+        var cols = p.GetPartColliders();
+        if (cols == null) return false;
+
+        bool any = false;
+        for (int i = 0; i < cols.Length; i++)
+        {
+            var c = cols[i];
+            if (c == null || !c.enabled) continue;
+            Bounds cb = c.bounds;
+            if (float.IsNaN(cb.size.x) || float.IsInfinity(cb.size.x)) continue;
+            if (cb.size.x > maxPartExtent || cb.size.y > maxPartExtent || cb.size.z > maxPartExtent) continue;
+            if (!any) { bounds = cb; any = true; } else bounds.Encapsulate(cb);
+        }
+        return any;
+    }
+
     // Renderer bounds for one part, with everything that is not part geometry rejected. Used by
     // every measurement in this file, so the rejection happens once and applies everywhere.
     bool TryGetPartBounds(Part p, out Bounds bounds)
     {
         bounds = new Bounds();
         if (p == null) return false;
+
+        Bounds colB;
+        bool hasCol = TryGetColliderBounds(p, out colB);
 
         var rends = p.GetComponentsInChildren<Renderer>(false);
         bool any = false;
@@ -889,8 +1095,15 @@ public class WingtipVortex : MonoBehaviour
                 || float.IsInfinity(s.x) || float.IsInfinity(s.y) || float.IsInfinity(s.z)
                 || float.IsNaN(c.x) || float.IsInfinity(c.x)) continue;
 
+            // A large renderer that reaches well beyond its own part's physical geometry is an
+            // effect mesh, not the part (see rendererColliderCheck).
+            bool oversizedForPart = hasCol && s.magnitude > rendererColliderCheck
+                                    && (s.magnitude > colB.size.magnitude * rendererColliderSlack
+                                        || (c - colB.center).magnitude > colB.size.magnitude * rendererColliderSlack);
+
             // The cull-defeating giants (see maxPartExtent).
-            if (s.x > maxPartExtent || s.y > maxPartExtent || s.z > maxPartExtent
+            if (oversizedForPart
+                || s.x > maxPartExtent || s.y > maxPartExtent || s.z > maxPartExtent
                 || (c - p.transform.position).sqrMagnitude > maxPartExtent * maxPartExtent)
             {
                 if (!rogueRendererLogged)
@@ -1649,23 +1862,36 @@ public class WingtipVortex : MonoBehaviour
         // STEP 2: climb upward if another part exists above this X/Z position
         // SKIP climb if this is already an extremity wing (prevents rear shifting forward)
         {
-            var rCheck = wing.GetComponentInChildren<Renderer>();
-            if (rCheck != null)
+            // TryGetPartBounds, not a raw renderer lookup, and this is THE fix for "reverting to
+            // launch moves the anchors". This test decides whether the anchor stays on the true
+            // tip or climbs to a part above it, by comparing this wing's lateral reach against
+            // the widest reach on the aircraft. Read raw, maxExt included whatever effect meshes
+            // happened to be enabled on that scene load, so the wingtip could not clear 95% of it
+            // — the guard failed, the climb ran, and the anchor was relocated inboard.
+            //
+            // It is load-dependent because effect renderers are: on the first spawn the guard
+            // held and the anchor sat on the tip; after a revert a plume was live, maxExt jumped,
+            // and the same wing was suddenly no longer "the extremity". Nothing else in the frame
+            // differed — same axes, same mass, same span, same chosen part.
+            Bounds rCheckB;
+            if (TryGetPartBounds(wing, out rCheckB))
             {
                 float maxExt = 0f;
                 foreach (var part in vessel.parts)
                 {
-                    var rr = part.GetComponentInChildren<Renderer>();
-                    if (rr == null) continue;
-                    float cProj = Vector3.Dot(rr.bounds.center - vesselTransform.position, vesselTransform.right);
-                    float eProj = ExtentAlong(rr.bounds, vesselTransform.right);
+                    Bounds rrB;
+                    if (!TryGetPartBounds(part, out rrB)) continue;
+                    float cProj = Vector3.Dot(rrB.center - vesselTransform.position, vesselTransform.right);
+                    float eProj = ExtentAlong(rrB, vesselTransform.right);
                     float ext = Mathf.Abs(cProj) + eProj;
                     maxExt = Mathf.Max(maxExt, ext);
                 }
 
-                float thisC = Vector3.Dot(rCheck.bounds.center - vesselTransform.position, vesselTransform.right);
-                float thisE = ExtentAlong(rCheck.bounds, vesselTransform.right);
+                float thisC = Vector3.Dot(rCheckB.center - vesselTransform.position, vesselTransform.right);
+                float thisE = ExtentAlong(rCheckB, vesselTransform.right);
                 float thisExt = Mathf.Abs(thisC) + thisE;
+                Debug.Log($"[VORTEX] CLIMB GATE part={wing.name} ext={thisExt:F2} vs widest={maxExt:F2} "
+                          + $"— {(thisExt >= maxExt * 0.95f ? "already the tip, NO climb" : "climbing")}");
 
                 if (thisExt >= maxExt * 0.95f)
                 {
@@ -1714,12 +1940,12 @@ public class WingtipVortex : MonoBehaviour
                 // higher" test and the climb spins on it until the safety counter stops it.
                 if (p == currentPart) continue;
 
-                var r = p.GetComponentInChildren<Renderer>();
-                if (r == null) continue;
+                Bounds pb;
+                if (!TryGetPartBounds(p, out pb)) continue;
 
-                float sizeX = r.bounds.size.x;
-                float sizeY = r.bounds.size.y;
-                float sizeZ = r.bounds.size.z;
+                float sizeX = pb.size.x;
+                float sizeY = pb.size.y;
+                float sizeZ = pb.size.z;
                 float area = sizeX * sizeZ;
 
                 // remove tiny junk (more aggressive to kill small control surfaces)
@@ -1734,9 +1960,8 @@ public class WingtipVortex : MonoBehaviour
                 // allow wider range of orientations (canted wings)
                 float upDot = Mathf.Abs(Vector3.Dot(p.transform.up, vesselTransform.up));
                 if (upDot < 0.2f) continue; // only reject extreme verticals
-                if (r == null) continue;
 
-                Bounds b = r.bounds;
+                Bounds b = pb;
                 // Projected extents, not the corners run through the transform: b.min/b.max are
                 // corners of a WORLD-aligned box, and converting those two points into a rotated
                 // frame does not give that box's extent in the new frame.
@@ -1783,8 +2008,8 @@ public class WingtipVortex : MonoBehaviour
 
             if (bestAbovePart != null)
             {
-                var r = bestAbovePart.GetComponentInChildren<Renderer>();
-                Bounds b = r.bounds;
+                Bounds b;
+                if (!TryGetPartBounds(bestAbovePart, out b)) break;
                 Vector3 maxLocal = ToVesselFrame(b.center) +
                                    new Vector3(ExtentAlong(b, axLateral), ExtentAlong(b, axVert), ExtentAlong(b, axLength));
 
@@ -1817,8 +2042,10 @@ public class WingtipVortex : MonoBehaviour
             // works for a level wing; on a canted or near-vertical winglet that direction runs
             // ALONG the surface instead of into it, which left the anchor floating just off the
             // tip. Nudging toward the part's own render centre is cant-agnostic.
-            var rFinal = currentPart.GetComponentInChildren<Renderer>();
-            Vector3 toward = (rFinal != null) ? rFinal.bounds.center : currentPart.transform.position;
+            Bounds finalB;
+            Vector3 toward = TryGetPartBounds(currentPart, out finalB)
+                ? finalB.center
+                : currentPart.transform.position;
             Vector3 inward = toward - anchorWorld;
             if (inward.sqrMagnitude > 1e-6f)
                 anchorWorld += inward.normalized * 0.03f;
@@ -1986,6 +2213,31 @@ public class WingtipVortex : MonoBehaviour
         // aircraft rather than the gear. Cruise fails the second, a high-altitude pass fails the
         // first, and the takeoff roll fails the third — which is the one it used to pass,
         // because the CL proxy is scale-free in speed and says nothing about who holds the weight.
+        // Fraction of full sunlight reaching the wake, 0-1, on any body. See nightFloorScale.
+        float sunLit = 1f;
+        {
+            CelestialBody star = (Planetarium.fetch != null) ? Planetarium.fetch.Sun : null;
+            double fullFlux = 0.0;
+            if (star != null)
+            {
+                double dSun = (vessel.CoM - star.position).magnitude;
+                if (dSun > 1.0)
+                    fullFlux = PhysicsGlobals.SolarLuminosity / (4.0 * System.Math.PI * dSun * dSun);
+            }
+            // Falling back to the raw flux rather than to a constant: if the star cannot be
+            // resolved, treating the sky as fully lit is the safer failure than going dark.
+            sunLit = (fullFlux > 1.0)
+                ? Mathf.Clamp01((float)(vessel.solarFlux / fullFlux))
+                : 1f;
+
+            if (!loggedSunFlux)
+            {
+                loggedSunFlux = true;
+                Debug.Log($"[VORTEX] illumination: flux={vessel.solarFlux:F0} full={fullFlux:F0} "
+                          + $"sunLit={sunLit:F2} scale={Mathf.Lerp(nightFloorScale, dayLightScale, sunLit):F2}");
+            }
+        }
+
         float rhoASL = (vessel.mainBody != null) ? (float)vessel.mainBody.atmDensityASL : 1.225f;
         float depthBlend = Mathf.Clamp01((rho / Mathf.Max(rhoASL, 0.001f) - humidDensityMin)
                                          / Mathf.Max(1f - humidDensityMin, 0.01f));
@@ -2164,8 +2416,13 @@ public class WingtipVortex : MonoBehaviour
             if (approachFloor > 0f)
                 visible = Mathf.Max(visible, approachFloor * strengths[i]);
 
-            float lightFactor = Mathf.Clamp01((float)(vessel.solarFlux / 2000f));
-            visible *= Mathf.Lerp(0.2f, 1f, lightFactor);
+            // See nightFloorScale. dayLightScale is deliberately 0.75 rather than 1.0: with the
+            // normalisation fixed, full daylight would otherwise jump from the 0.68 the old
+            // hard-coded divisor happened to produce on Kerbin straight to 1.0, brightening every
+            // daytime wake by about a third as a side effect of fixing the night. 0.75 keeps the
+            // daylight look as tuned and makes the constant explicit instead of accidental.
+            float nightScale = Mathf.Lerp(nightFloorScale, dayLightScale, sunLit);
+            visible *= nightScale;
 
             float atmFactor = Mathf.Clamp01((float)((vessel.atmDensity - 0.01f) / 0.09f));
             visible *= atmFactor;
@@ -2178,10 +2435,15 @@ public class WingtipVortex : MonoBehaviour
             // does now: ambient temperature above the atmosphere is cold, so contrailBlend goes
             // to 1 there, and an unscaled floor would relight every vortex at half strength in
             // orbit. No air, no condensation — whatever the temperature says.
+            //
+            // Scaled by nightScale for the same class of reason: no light, nothing to scatter.
+            // This was the one path in the frame that ignored the sun, which is why contrails
+            // stayed bright on the night side while everything else went dim.
             if (contrailBlend > 0f)
             {
                 visible = Mathf.Max(visible,
-                                    Mathf.Lerp(0.1f, 0.5f, contrailBlend) * strengths[i] * atmFactor);
+                                    Mathf.Lerp(0.1f, 0.5f, contrailBlend)
+                                    * strengths[i] * atmFactor * nightScale);
                 visible *= Mathf.Lerp(1f, 1.5f, contrailBlend);
             }
 

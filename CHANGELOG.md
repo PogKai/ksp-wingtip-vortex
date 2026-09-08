@@ -4,6 +4,32 @@ All notable changes to KSP Wingtip Vortex.
 
 ---
 
+## 1.0.1
+
+Fixes found while flight-testing 1.0.0 on a heavily modded install.
+
+### Fixed
+
+* **Anchors stay on the wingtip across a Revert to Launch.** The guard that decides whether an
+  anchor climbs to a part above it compared the wing's lateral reach against the widest reach on
+  the aircraft, read from raw renderer bounds. Effect meshes inflated that comparison, so the real
+  wingtip could not clear it, the climb ran, and the anchor was relocated inboard — and because
+  effect renderers vary per scene load, it happened on some launches and not others. Every
+  renderer read in the file now goes through one filtered path.
+
+* **Source detection waits for a vessel that is ready to be measured**, not merely loaded. A
+  vessel is `loaded` while still packed, with parts not yet at their flight positions; on a
+  modded install this took over 16 seconds. Detection also runs a second confirmation pass while
+  the craft is still on the ground, so a mistimed first pass is self-healing.
+
+* **Night is applied to every path, including high-altitude contrails.** The contrail floor is
+  applied with `Max()` and so bypassed the light term entirely, leaving high-altitude wakes at
+  full brightness on the night side. Illumination is also normalised against the unoccluded flux
+  at the vessel's own distance from the star, so "full daylight" means the same thing on every
+  body rather than varying more than 2x between Duna and Eve.
+
+---
+
 ## 1.0.0 — First Stable Release
 
 Everything below this section is the development history that led here. 0.6.0 was the last

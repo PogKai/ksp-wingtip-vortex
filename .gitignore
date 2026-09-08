@@ -1,0 +1,17 @@
+# Build output. bin/ in particular contains copies of KSP's and Unity's own
+# assemblies (Assembly-CSharp.dll, UnityEngine.*.dll), which are Squad/Unity
+# property and must never be redistributed here.
+bin/
+obj/
+
+# Visual Studio local state
+.vs/
+*.user
+*.suo
+
+# Local Visual Studio project. The canonical source of record is Source/WingtipVortex.cs;
+# keeping a second copy here under version control only lets the two drift apart. The .csproj
+# also carries machine-specific HintPaths to a local KSP install, so it would not build
+# anywhere else as-is.
+WingtipVertex/
+WingtipVertex.slnx

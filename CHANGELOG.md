@@ -68,7 +68,7 @@ public release, so every 0.6.x entry that follows ships for the first time as pa
 
 * Highly canted or unconventional wing setups may still have slight placement offsets.
 * Front vortex detection depends on parts carrying valid stock aero modules.
-* FAR is not supported — it replaces `ModuleLiftingSurface`, which is what this reads.
+* **FAR is untested, not known-broken.** FAR does not strip the stock lifting-surface modules, so wingtip detection should still work. But it supplies its own aerodynamics, so stock `liftForce` is likely to read zero — in which case the effect falls back to felt G and loses the accuracy the circulation model depends on. Reports from FAR users welcome.
 
 ---
 

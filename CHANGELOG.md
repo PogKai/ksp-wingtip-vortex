@@ -68,7 +68,7 @@ public release, so every 0.6.x entry that follows ships for the first time as pa
 
 * Highly canted or unconventional wing setups may still have slight placement offsets.
 * Front vortex detection depends on parts carrying valid stock aero modules.
-* **FAR is untested, not known-broken.** FAR does not strip the stock lifting-surface modules, so wingtip detection should still work. But it supplies its own aerodynamics, so stock `liftForce` is likely to read zero — in which case the effect falls back to felt G and loses the accuracy the circulation model depends on. Reports from FAR users welcome.
+* **FAR is not supported.** Confirmed by test, not assumed: FAR removes the stock lifting-surface modules (`!MODULE[ModuleLiftingSurface]`), and those are what surface detection matches on, so no vortices spawn at all. FAR's own lift data does read correctly through its API, so support is feasible — detection just has to be taught FAR's module names. Not in this release.
 
 ---
 

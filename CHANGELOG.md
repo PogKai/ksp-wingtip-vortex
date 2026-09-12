@@ -4,6 +4,108 @@ All notable changes to KSP Wingtip Vortex.
 
 ---
 
+## 1.1.0 — Rockets
+
+1.0.1 handled aircraft. This release makes the mod work on vertically-launched craft, and fixes a
+class of bug that only appears once you stop treating "the vessel" as something decided at load.
+
+### Added
+
+* **Rocket and booster support.** A vertically-launched craft gets its own source rule: the
+  lifting surfaces at the bottom of the stack, one vortex each, up to four. The aircraft rule
+  could not express this. It is `{left, right} x {main, secondary}` picked by reach from the
+  centreline, and that rests on "left" and "right" being real — which they are on a wing and are
+  not on a cruciform tail. Roll a Redstone 45 degrees and the same four fins swapped between
+  qualifying and being rejected as centre sections, because `minLateralOffset` was written to
+  throw away an aircraft's *rudder*. Offset is now measured radially from the roll axis, which is
+  the only thing that had to change to make it roll-invariant.
+
+* **Craft type is decided by shape, not launch attitude.** Nose-up only exists while the craft is
+  on the pad, so it could not answer the question after a mid-flight vessel switch — and it
+  silently answered "not a rocket", dropping a booster into the aircraft rule. A rocket is
+  *slender*: measured from part positions, a MiG-29 reads 14.0 m along by 11.6 m across (ratio
+  1.2) and a Mercury-Redstone 15.3 m by 1.2 m (ratio ~13). Attitude is kept only as an extra way
+  to say yes while still on the pad.
+
+* **Sector selection, shipped inert.** Candidates are clustered by angle about the roll axis and
+  logged on every detection; nothing consumes them unless `useSectorSelection` is set. This is
+  the generalisation that would retire the two separate rules — `{left, right}` is one sector axis
+  with the count hard-coded to 2 — and it ships switched off so the model can be validated from
+  logs across a fleet before anything depends on it.
+
+### Fixed
+
+* **Switching craft in flight left the mod pointed at the craft you left.** `vessel` was captured
+  once in `Start()` and never re-read, so the new craft got nothing. The staleness check could not
+  catch it either: it compares each anchor's part against `vessel`, and both were still the old
+  craft, so they agreed perfectly. Only recovering and re-launching fixed it, because that is what
+  finally ran `Start()` again.
+
+* **Magenta trails.** The shared materials are static, so they outlive the addon but not the
+  scene — a `Material` never marked `DontDestroyOnLoad` is destroyed on scene load and the static
+  reference then holds a destroyed object. `Start()` checked for that; the vessel-switch path added
+  in this release did not. Materials now come from accessors that rebuild on demand, with shader
+  fallbacks, so a missing shader degrades to a working material rather than to magenta.
+
+* **The wake ended abruptly on ascent, twice.** Crossing `lineModeSpeed` cleared the accumulated
+  trail in a single frame, because the handover fired the moment line mode became *eligible*
+  rather than when the trail had actually faded. And the line renderer was then switched off
+  outright with no fade at all. Both are now genuine cross-fades.
+
+* **The two renderers shut down at different speeds.** Leaving the atmosphere they stop together —
+  both gate on the same visibility test — but the line faded in about a third of a second while
+  the trail held up to five seconds of geometry aging out. One vanishing while the other was
+  visibly still going reads as a cut even though neither was cut. They now share one time
+  constant, and the trail retracts rather than holding full length and dimming.
+
+* **The tube's inward curve alternated direction on cruciform tails.** It picked between
+  `+lateral` and `-lateral` on the sign of the ring's lateral offset, and two of four fins sit at
+  offset ~0 by construction — so ordinary airframe wobble flipped it ring to ring, and since the
+  displacement grows with distance from the head, the alternation opened into a widening sawtooth.
+  It now points at the roll axis directly: no sign test, and correct for a fin pointing straight
+  up where neither lateral direction was ever right.
+
+* **Wake smoothing.** A real vortex core has inertia and does not record every twitch of the tip
+  that made it. Laplacian smoothing over a bounded window near the head, so the head stays welded
+  to the tip and each ring is smoothed a fixed number of times rather than compounding.
+
+### Changed
+
+* **Every source renders through the tube** — main wings, canards, and (optionally) rocket fins.
+  The objection to tubes on secondaries was about the inward *curve*, and that handles itself:
+  the displacement is already scaled by shed strength, so a gated-down surface curves
+  proportionally less.
+
+* **Rockets use the trail renderer and skip line mode entirely.** Line mode is the *short*
+  renderer — its length tops out at a procedural per-point offset and is shortened further by
+  stress at exactly the speeds a booster flies, while the trail is `speed * time` capped at 2.5 km.
+  Its original justification, that trail geometry outran its own resampling at extreme velocity,
+  was really the Krakensbane bug fixed in 0.6.1.
+
+* **Wake brightness falls off across the whole length instead of sitting flat.** `trailAlphaGain`
+  at 1.25 against a shed strength near 1.0 meant `Clamp01` saturated, so roughly the first 60% of
+  a wake rendered as a flat plateau at pure white and the curve's top was simply thrown away.
+  There is now an explicit peak window (~12%) and a taper over everything after it, shared by the
+  tube and the trail.
+
+* **Secondary surfaces are much harder to activate, and look right once they are.** The onset is
+  now a *multiple* of the main wing's own onset rather than an absolute figure — the old 6.0 g
+  against a 3.0 g main pinned the handicap at exactly 2.0x at every speed and altitude, so at
+  150 m/s a canard fired at 3.6 g. The multiple is `1/spanRatio`, which is what the circulation
+  argument gives: a canard carrying ~15% of the lift over ~50% of the span needs proportionally
+  more load to reach the wing's condensing circulation. Strength now falls off quadratically with
+  span (core pressure drop goes as circulation *squared*) but is anchored near 1, so a surface
+  that has cleared its onset is actually worth looking at.
+
+* **Canard wakes are short.** A canard's vortex on approach is real and, on a close-coupled
+  canard-delta, strong by design — pitch stability requires the foreplane to stall first, so it is
+  flown at a higher lift coefficient than the wing. What it does not do is *trail*: it passes over
+  the wing and is entrained into the wing's vortex system, usually bursting within a chord or two.
+  So the error was never brightness or threshold, it was length. Secondary wakes are capped at a
+  fixed ~25 m of cord scaled by span, at every speed.
+
+---
+
 ## 1.0.1
 
 Fixes found while flight-testing 1.0.0 on a heavily modded install.

@@ -6,9 +6,9 @@ Adds dynamic, geometry-aware wingtip vortices to aircraft in Kerbal Space Progra
 
 ## Overview
 
-This mod generates wingtip vortices that react to how you’re flying and how your aircraft is built. It supports complex wing setups, including multi-part wings, canted surfaces, and forward canards, while staying visually stable across a wide range of speeds and flight conditions.
+This mod generates wingtip vortices that react to how you’re flying and how your craft is built. It supports complex wing setups — multi-part wings, canted surfaces, forward canards — and, as of 1.1.0, vertically-launched rockets, whose fins are found radially rather than by which side of the centreline they sit on.
 
-Main vortices are drawn with a procedural tube mesh that curves inward under mutual induction, the way a real counter-rotating vortex pair does, and that tube is the only renderer for those sources at any speed. Secondary surfaces use trail rendering, with a line mode taking over in the extreme-velocity regime where accumulated trail geometry would outrun its own resampling.
+Aircraft vortices are drawn with a procedural tube mesh that curves inward under mutual induction, the way a real counter-rotating vortex pair does, and that tube is the only renderer for those sources at any speed. Rockets use trail rendering throughout, which suits a craft that spends its whole ascent rotating.
 
 ---
 
@@ -18,11 +18,14 @@ Main vortices are drawn with a procedural tube mesh that curves inward under mut
 * Appear on a slow, high-alpha landing approach as well as in a hard break turn
 * **Body-relative**: nothing in the effect model is keyed to altitude in metres, so behaviour is correct on every planet without per-body tuning
 * Procedural tube mesh for main vortices, trails for secondary surfaces
-* Supports complex aircraft geometry:
+* Supports complex geometry:
   * Multi-part wings
   * Stacked wings
   * Canted / angled wing tips
   * Forward canards
+  * **Rocket and booster fins**, any count, any radial arrangement
+* Craft type is identified by **shape**, not launch attitude, so it survives a mid-flight vessel switch
+* Secondary surfaces (canards, small fins) need real load to appear, and their wakes are short — a canard vortex bursts over the wing within a chord or two rather than trailing
 * Mesh-accurate wingtip detection that finds the true aerodynamic tip
 * A canard that reaches the outboard end of the span is treated as the wingtip it is
 * Capped at four vortices per aircraft, structurally
@@ -73,8 +76,10 @@ The system:
 2. Resolves the airframe's own geometric frame rather than trusting the root part's axes
 3. Finds the true wingtip from mesh vertices, measured from the roll axis
 4. Groups physically continuous surfaces so one wing cannot produce several vortices
-5. Places at most four anchors: {left, right} × {main, secondary}
+5. Places anchors: {left, right} × {main, secondary} on aircraft, or one per fin on a rocket
 6. Applies visual behaviour based on flight conditions
+
+Detection re-runs by itself when it needs to — on staging, part loss, docking, or switching craft — so a wake never keeps drawing from parts you are no longer flying.
 
 ---
 
@@ -148,7 +153,7 @@ PogKai
 
 ## Version
 
-v1.0.1
+v1.1.0
 
 ---
 

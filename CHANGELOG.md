@@ -4,6 +4,59 @@ All notable changes to KSP Wingtip Vortex.
 
 ---
 
+## Unreleased — Wing vapor
+
+The mod now draws the other thing a fighter leaves in a hard pull: the white sheet over the wings.
+It is a second, independent effect in the same mod, worked out from the physics of the air over each
+wing section rather than from thresholds, and it shares nothing with the vortex code but the log tag
+and the version.
+
+### Added
+
+* **Wing vapor.** Every lifting part is treated as a wing section. How hard it is working (its lift,
+  corrected for the other parts around it), how that load is spread along the chord (smoothly with the
+  camber, and piled into a suction peak behind the leading edge as the angle of attack grows, sharpened
+  toward Mach 1), the local pressure and temperature, and how moist the air is give the cooling the air
+  goes through crossing the wing. Where that takes it past its dew point, water condenses and the vapor
+  is drawn: a thin haze along the leading edge first, spreading back over the wing as the pull
+  tightens, thinner toward the tips, different on each wing in a bank.
+
+* **It is hard to get, and the reasons are physical.** A passenger jet at its structural limit shows a
+  faint trace at most; a fighter needs a real pull in humid air; a takeoff roll, cruise and a slow
+  approach show nothing. Slow, hard-working wings condense sooner than fast ones at the same load,
+  the way real ones do.
+
+* **A wing is many parts.** Stacked, clipped and canted parts are one wing; control surfaces are part
+  of the section they sit in, so a hard-deflected aileron shifts its section by its share rather than
+  acting as a whole airfoil. Parts buried inside a fuselage or an engine nacelle make no vapor.
+
+* **Hard altitude cutoff.** In air thinner than 10% of the body's sea-level density (about 14 km on
+  Kerbin, measured) there is no vapor and the wing-vapor code does no work at all, so orbit, space
+  stations and rockets cost nothing. Body-relative, like the vortices.
+
+* **Lit by the scene.** White in sunlight, dimmed on the night side from the star's actual flux, using
+  the same measure and night floor as the vortices.
+
+* **Diagnostics on request.** The mod logs one `[VORTEX] wing vapor:` line per flight. An empty
+  `verbose.txt` in the mod's folder turns on the detailed log: part loading, step times, which parts
+  are condensing, and each crossing of the altitude limit.
+
+### Notes
+
+* **FAR is not supported**, as for the vortices: it replaces the stock lifting modules the wing vapor
+  reads.
+* KSP has no weather, so how moist the air is a stand-in (a fixed dew-point spread: 12 K in the humid
+  lowest layer, 18 K above it).
+* A surface lifting against the aircraft's net lift (a tailplane trimming the aircraft, a canard set
+  against the wing) makes no vapor. KSP loads these far harder than a real aircraft would, and they
+  looked like artifacts. This is a style choice, not physics.
+* Cost: on a 137-part fighter in hard turns its physics averaged under 2.5 ms per physics step, and
+  drawing it about a quarter of a millisecond a frame. Larger craft are updated every 2 to 4 physics
+  steps, which its own smoothing hides. One particle system per aircraft, capped, with no extra assets:
+  KSP's own particle shader and a texture generated in code.
+
+---
+
 ## 1.1.0 — Rockets
 
 1.0.1 handled aircraft. This release makes the mod work on vertically-launched craft, and fixes a

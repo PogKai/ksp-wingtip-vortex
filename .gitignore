@@ -15,3 +15,6 @@ obj/
 # anywhere else as-is.
 WingtipVertex/
 WingtipVertex.slnx
+
+# Release packages
+dist/

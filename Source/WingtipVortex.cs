@@ -663,6 +663,198 @@ public class WingtipVortex : MonoBehaviour
     private float humidLiftShareFull = 1.00f;
     private float humidFloor = 0.40f;        // peak visibility floor on a slow, hard-working wing
 
+    // VISCOUS CORE GROWTH (Lamb-Oseen, with Squire's eddy viscosity).
+    //
+    // Both renderers already spread the wake with age, through their own tailRatio, but that is a
+    // tuned lerp with no physics in it: the same ratio whatever the craft, the air or the load.
+    // The real spreading law is known, cheap, and explains something the lerp cannot — why a
+    // heavy aircraft's wake holds together as a tight rope while a light one goes soft in seconds.
+    //
+    // Lamb-Oseen gives r(t) = sqrt(r0^2 + 4*alpha*nu*t) with alpha = 1.25643. Fed MOLECULAR
+    // viscosity that is invisible: nu ~ 1.5e-5 m^2/s is about two centimetres of growth in five
+    // seconds. That is the right answer for laminar flow and the wrong one for a wake, which
+    // spreads by TURBULENT diffusion. Squire's hypothesis supplies the eddy viscosity as
+    // proportional to the vortex's own circulation, nu_t = delta * Gamma — a stronger vortex
+    // stirs its own surroundings harder and diffuses faster.
+    //
+    // Both terms are summed rather than switched, so air too thin to sustain turbulence falls
+    // back toward the molecular floor instead of to nothing.
+    private float coreGrowthEnable = 1f;      // 0 restores the pure tailRatio look; blends 0-1
+    private float squireDelta = 2e-4f;        // nu_t / Gamma; literature sits around 1e-4 to 1e-3
+    private const float lambOseenAlpha = 1.25643f;
+    // VISIBLE core radius at shedding, as a fraction of span, and the distinction in that first
+    // word is the whole reason this number is 0.08 and not the 0.04 it started at.
+    //
+    // 3-5% of span is the right figure for the VISCOUS core, and it is the wrong object to put
+    // here: what this scales is the radius of the drawn feature, and the vapour fills the whole
+    // low-pressure region, which is materially wider than the viscous core. r0 enters the rate
+    // SQUARED and in the denominator, so anchoring it to the wrong quantity was amplified
+    // fourfold — the first flight test pinned coreGrowthMax at 2 seconds on every sample, which
+    // is the clamp doing the modelling instead of backstopping it.
+    //
+    // The cross-check that settles it is nondimensional time, t* = t*Gamma/(2*pi*b0^2) with
+    // b0 = (pi/4)*b, the standard yardstick for wake age. A measured break turn (MiG-29A, span
+    // 11.6 m, Gamma 619 m^2/s) reaches only t* = 2.4 after two seconds, and a wake stays
+    // organised to t* of roughly 4-8. So the core at that point should have grown moderately,
+    // not tripled. 0.08 puts it at 1.9x at the end of a low-altitude wake's life and leaves the
+    // clamp untouched in every flight case measured.
+    //
+    // It is still what makes the spreading scale-relative, which is the point: identical
+    // absolute diffusion is a large fraction of a light aircraft's small core and a small
+    // fraction of an airliner's large one.
+    private float coreSpanFraction = 0.08f;
+    private float coreGrowthMax = 2.5f;       // last line of defence on the multiplier
+    // DIMMING AS IT SPREADS, and the half that makes the growth physical rather than just fatter.
+    // Circulation is conserved as the core diffuses, so spreading it over a wider core drops the
+    // peak vorticity and with it the core pressure deficit, which goes as 1/r^2. Condensation
+    // follows that deficit, so a core that has doubled in radius should be markedly fainter, not
+    // the same brightness over twice the area — widening alone reads as a glowing cone.
+    //
+    // The exponent is well under 2 on purpose. Visibility is not linear in pressure drop: vapour
+    // is a THRESHOLD effect (the same reason massSpanFactor soft-saturates), so once the core is
+    // condensing at all, halving the deficit does not halve what you see. 0.8 keeps width*alpha
+    // roughly flat, so the wake softens and spreads instead of either blooming or vanishing.
+    private float coreDimPow = 0.8f;
+    // Per-frame result, in 1/s: the whole bracket of r(t)/r0 = sqrt(1 + rate*t). Computed once in
+    // Update and applied per ring (tube) or per width key (trail) with one multiply and one sqrt.
+    private float coreGrowthRate = 0f;
+    // Two one-shots, not one. The first qualifying manoeuvre on any flight is almost always down
+    // low, so a single latch reports sea-level numbers and then goes quiet for the rest of the
+    // session — including the contrail regime, where the growth is largest and stacks on top of
+    // tailRatio. The second latch fires once the band is actually reached.
+    private bool loggedCoreGrowth = false;
+    private bool loggedCoreGrowthHigh = false;
+
+    // VISCOSITY. Sutherland's law rather than a fixed value, because the mod already reads real
+    // ambient temperature and a constant here would just be a Kerbin sea-level assumption wearing
+    // a physics coat: mu(T) = mu0 * (T/T0)^1.5 * (T0+S)/(T+S). Absolute Kelvin, so like the
+    // contrail band it needs no per-body tuning to be right on Duna or Eve.
+    private float sutherlandMu0 = 1.716e-5f;   // Pa.s at T0
+    private float sutherlandT0 = 273.15f;      // K
+    private float sutherlandS = 110.4f;        // K
+    // NO REYNOLDS GATE, and that is a measured decision rather than an omission. A laminar/
+    // turbulent blend was built here first, on span Reynolds and then on vortex Reynolds
+    // (Gamma/nu, the quantity the wake-vortex literature actually uses). Both read 1e6 to 1e8
+    // across every flight case that draws anything — stock jet, airliner on final, contrail
+    // cruise, rocket ascent, re-entry — so the blend evaluated to "fully turbulent" always, and
+    // it still did at the thin-air limit where the mod stops drawing at all (rho 0.01 puts
+    // Gamma/nu near 1e6). The honest statement is the simple one: a trailing vortex in air thick
+    // enough to condense anything is turbulent, without exception, so there is no transition to
+    // model. Three tunable constants that can only ever evaluate to 1.0 would have been the
+    // helix-wavelength mistake again — correct mechanism, no signal.
+    //
+    // Ceiling on the MOLECULAR term. nu = mu/rho diverges as the air runs out, and without this
+    // a re-entry trail would fatten on a laminar diffusion term in air far too thin to condense
+    // anything, which is growth with nothing on screen to justify it.
+    private float nuMolecularCap = 5e-4f;      // m^2/s
+    // Ambient stirring. The lower atmosphere is convectively mixed and the air near the surface
+    // more so, which is a real and well-measured accelerant on wake decay. Rides the same
+    // depth-in-atmosphere blend the humid boundary layer already computes, so it costs nothing
+    // extra and stays body-relative.
+    private float ambientTurbScale = 0.6f;     // extra eddy viscosity at full atmospheric depth
+
+    // GROUND EFFECT (method of images). A wall is modelled exactly by a mirror vortex of opposite
+    // sign beneath it, and the mirror does two things to a real wake pair: it cancels the pair's
+    // self-induced descent, and it pushes each vortex OUTBOARD. That lateral drift is why wake
+    // turbulence migrates onto parallel runways, and it is the visible signature — behind a
+    // low pass the two ropes splay apart instead of running parallel.
+    //
+    // Not a visibility gate, by the rule at airborneBlend: suppressing near the ground would kill
+    // the short-final vapour this mod exists to draw. This changes where the rope goes and how
+    // fast it diffuses. It never decides whether it is drawn.
+    //
+    // For a pair at height h with separation b0 = (pi/4)*b, own image minus partner's image:
+    //   lateral drift    v = Gamma/(4*pi) * b0^2 / (h * (4h^2 + b0^2))
+    //   descent retained    4h^2 / (4h^2 + b0^2)
+    // h is floored at b0/2 in the drift. That is the height an inviscid pair asymptotes to and
+    // can never get below, and it is where the formula stops being the physics and starts being
+    // a singularity.
+    private float groundEffectEnable = 1f;      // 0 disables both drift and near-ground diffusion
+    private float groundSpreadScale = 1f;
+    private float groundSpreadMaxSpans = 1.5f;  // backstop on total lateral drift
+    // The ground boundary layer separates under a vortex and rolls up a secondary vortex of
+    // opposite sign, which is what saps a wake's circulation near the surface and shortens its
+    // life. Expressed as extra eddy viscosity scaled by the ground factor, so it rides the same
+    // growth law as everything else instead of inventing a second decay.
+    private float groundTurbScale = 1.5f;
+    // Beyond this many spans the image terms are below one percent. Also a guard: a stale
+    // altitude reading can only ever produce a spurious effect if it reads LOW, and this bounds
+    // how wrong it can be before it is simply ignored.
+    private float groundEffectCeilingSpans = 10f;
+    private bool loggedGroundEffect = false;
+
+    // VORTEX BREAKDOWN, dual mode. A swirling core with too much rotation for its axial flow
+    // stagnates on its axis and bursts. Two forms: SPIRAL, where the core kinks into a
+    // precessing corkscrew and then disperses, and BUBBLE, an abrupt axisymmetric bulge with
+    // recirculation inside, after which the core is gone. Spiral appears near onset; bubble
+    // takes over at higher swirl.
+    //
+    // The controlling quantity is the swirl ratio, peak tangential velocity over axial velocity.
+    // For a Lamb-Oseen core v_max = 0.715 * Gamma / (2*pi*rc), so S = 0.715*Gamma/(2*pi*rc*V).
+    // Everything in that is already known, and at fixed load it rises as speed falls, because
+    // Gamma = L/(rho*V*b) — which is exactly the angle-of-attack dependence, without an AoA
+    // field KSP does not have. Written out it is 1.42 * clProxy: the same CL/AR measure the
+    // humid boundary layer already keys off.
+    //
+    // rc here is the VISCOUS core, 4% of span, not coreSpanFraction's 8% visible radius. Swirl
+    // is a property of the flow, and the flow's peak velocity sits at the viscous core edge.
+    //
+    // Thresholds from Spall, Gatski & Grosch (1987): breakdown when the Rossby number W/(r*Omega)
+    // falls below about 0.65, i.e. swirl above about 1.5. Onset ramps in slightly before that so
+    // the effect grows in rather than switching on.
+    private float breakdownEnable = 1f;
+    private float viscousCoreSpanFraction = 0.04f;
+    private float breakdownSwirlOnset = 1.4f;
+    private float breakdownSwirlFull = 2.2f;
+    private float bubbleSwirlMin = 1.7f;        // below: pure spiral
+    private float bubbleSwirlMax = 2.1f;        // above: pure bubble
+    // Where along the wake it bursts. The burst point moves UPSTREAM as swirl rises — the same
+    // behaviour measured on delta-wing vortices, where it walks forward with AoA. Barely past
+    // onset it happens far back; deep in breakdown, within a span of the tip.
+    private float breakdownStationFarSpans = 8f;
+    private float breakdownStationNearSpans = 1f;
+    private float breakdownSmoothTime = 0.3f;   // s; Gamma reads raw lift and would otherwise flicker
+    private float breakdownDevelopTime = 0.25f; // s for the broken structure to develop past the burst
+    // Downstream of a burst the core is fully turbulent at large scale, so it diffuses much
+    // faster than the Squire term alone gives. Extra growth accumulates only after the burst.
+    private float breakdownDiffusion = 1.5f;
+    private float breakdownGrowthMax = 2f;
+    // Depth at which the spiral and bubble reach full SIZE. A breakdown mode is a finite-
+    // amplitude structure: once the flow is past critical it takes its size quickly, rather than
+    // growing in proportion to how far past it is. Scaling size linearly with depth left the
+    // spiral at half a metre by the time bubble took over, which is invisible from a chase
+    // camera. How far upstream it bursts and how fast it fades still follow depth.
+    private float breakdownSizeSaturateDepth = 0.3f;
+    // Spiral geometry, in visible core radii so it scales with the airframe. The minimum rings
+    // per turn stops a short wavelength aliasing into a polygon on coarse ring spacing.
+    private float spiralAmpCores = 1.5f;
+    private float spiralWavelengthCores = 10f;
+    private float spiralMinRingsPerTurn = 8f;
+    private float spiralPrecession = 1.5f;      // rad/s; 0 freezes the corkscrew in the air
+    private float spiralFadeRate = 0.8f;        // 1/s at full depth
+    // Bubble geometry. The flare is deliberately NOT paired with dimming: the bulge is vapour
+    // that has already condensed being pushed outward, which is why a burst reads as a puff.
+    private float bubbleAmp = 1.5f;             // extra radius at the bubble's widest, full depth
+    private float bubbleLengthCores = 6f;
+    private float bubbleMinRings = 4f;
+    private float bubbleFadeRate = 2.5f;        // 1/s at full depth; the core is gone soon after
+    private float smoothedSwirl = 0f;
+    private bool loggedBreakdown = false;
+    // Session peaks, reported on destroy. Breakdown thresholds are literature values applied to
+    // a swirl estimate built on an assumed core size, so the peak a real flight reaches is the
+    // number that says whether they are in the right place — reported whether or not it fired.
+    private float peakSwirl = 0f, peakSwirlSpeed = 0f, peakSwirlGamma = 0f;
+    private float peakGroundFac = 0f;
+
+    // Per-frame values handed to PushRibbonPoint and BuildRibbonMesh, which need the vessel's
+    // state but are called per source.
+    private float frameGamma = 0f, frameSpeed = 1f, frameB0 = 1f, frameR0Vis = 0.1f;
+    private float frameAGL = -1f, frameGroundFac = 0f;
+    private bool frameGroundOn = false;
+    private Vector3 frameUp = Vector3.up, frameVesselPos = Vector3.zero;
+    private float frameTurbRate = 0f;           // coreGrowthRate before coreGrowthEnable
+    private float frameBreakT = 1e6f, frameBreakDepth = 0f, frameBreakMode = 0f;
+
     // PERSISTED-WAKE SINK (OFF by default — see the writeup for why). Real trailing vortices
     // sink under their own induced flow, a few hundred ft/min early on, slower as they age. This
     // approximates that by nudging every EXISTING trail vertex down by a small amount on a fixed
@@ -745,12 +937,73 @@ public class WingtipVortex : MonoBehaviour
     };
     private AnimationCurve shedCurve = new AnimationCurve();
     private Gradient shedGradient = new Gradient();
+    private Gradient lineGradient = new Gradient(); // line-mode's own scratch gradient — see its use below
 
     // Cached on the bounds timer: FindPartModulesImplementing allocates and GetTotalMass walks
     // every part, so neither belongs in the per-frame path.
     private List<ModuleLiftingSurface> liftSurfaces = new List<ModuleLiftingSurface>();
     private float vesselMassTons = 1f;
     private float gravityAccel = 9.81f;
+
+    // FAR REPLACES ModuleLiftingSurface on every wing it touches, so liftSurfaces above comes up
+    // empty under FAR and the load factor below silently degrades to geeForce — precisely the
+    // "climbing on thrust alone spawns vortices" case this file exists to avoid. FARAPI exposes
+    // real per-vessel aerodynamic force, so read that instead when FAR is running. Bound by
+    // reflection so there is no hard dependency: a missing or incompatible FAR just leaves
+    // FARBridge.Available false and the mod behaves exactly as it did before FAR was considered.
+    static class FARBridge
+    {
+        private static System.Reflection.MethodInfo miAeroForce;
+        private static bool initialized = false;
+        private static bool available = false;
+
+        public static bool Available { get { return available; } }
+
+        public static void Init()
+        {
+            if (initialized) return;
+            initialized = true;
+            try
+            {
+                foreach (System.Reflection.Assembly asm in System.AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    if (!asm.GetName().Name.StartsWith("FerramAerospaceResearch")) continue;
+                    System.Type farApi = asm.GetType("FerramAerospaceResearch.FARAPI");
+                    if (farApi == null) continue;
+                    miAeroForce = farApi.GetMethod("VesselAerodynamicForce", new[] { typeof(Vessel) });
+                    available = miAeroForce != null;
+                    break;
+                }
+            }
+            catch { available = false; }
+            Debug.Log(available
+                ? "[VORTEX] FAR detected — reading lift from FARAPI"
+                : "[VORTEX] FAR not detected (or API mismatch) — reading lift from stock modules");
+        }
+
+        // Total aerodynamic force in world space, kN — the same convention ModuleLiftingSurface.
+        // liftForce already uses, so the caller needs no unit conversion. Lift is isolated by
+        // dropping the component of that force lying along the flow direction (drag).
+        public static float GetLiftKN(Vessel v, Vector3 flowNormalized)
+        {
+            if (!available || v == null) return 0f;
+            try
+            {
+                Vector3 aero = (Vector3)miAeroForce.Invoke(null, new object[] { v });
+                if (aero.sqrMagnitude < 1e-8f) return 0f;
+                Vector3 drag = Vector3.Dot(aero, flowNormalized) * flowNormalized;
+                return (aero - drag).magnitude;
+            }
+            catch
+            {
+                // A version mismatch surfaces here rather than at Init(), since the method can
+                // resolve but still throw on a changed signature. Stop trying rather than pay
+                // this try/catch every physics frame for the rest of the flight.
+                available = false;
+                return 0f;
+            }
+        }
+    }
 
     // Low-pass on the LIFT MEASUREMENT, which is a different thing from the build/decay rates
     // above and must not be confused with them. KSP recomputes liftForce at physics rate off
@@ -984,6 +1237,7 @@ public class WingtipVortex : MonoBehaviour
         Debug.Log($"[VORTEX] WingtipVortex v{ModVersion} starting "
                   + $"(vessel ready after {waited:F1}s, packed={vessel.packed})");
 
+        FARBridge.Init();
         TrailMat();
         LineMat();
 
@@ -1061,6 +1315,14 @@ public class WingtipVortex : MonoBehaviour
     void OnDestroy()
     {
         GameEvents.onFloatingOriginShift.Remove(OnFloatingOriginShift);
+
+        // Calibration summary, whether or not either effect ever fired. See peakSwirl.
+        if (peakSwirl > 0f || peakGroundFac > 0f)
+        {
+            Debug.Log($"[VORTEX] session peaks: swirl={peakSwirl:F2} at V={peakSwirlSpeed:F0}m/s "
+                      + $"Gamma={peakSwirlGamma:F0}m2/s (breakdown onset {breakdownSwirlOnset:F2}, "
+                      + $"bubble from {bubbleSwirlMin:F2}) | ground factor={peakGroundFac:F2}");
+        }
 
         // The vortex objects are deliberately unparented so recorded trail geometry stays in world
         // space — which also means nothing else in the scene ever cleans them up. Without this,
@@ -2336,6 +2598,19 @@ public class WingtipVortex : MonoBehaviour
         // Inward direction, world space, frozen when the ring was laid.
         public Vector3[] inDir;
 
+        // Ground-effect drift velocity and ground factor, frozen at birth for the same reason as
+        // inDir: the ring is air, and the ground under it does not change after it is laid.
+        public Vector3[] geVel;
+        public float[] geFac;
+
+        // Breakdown state at birth: seconds after shedding at which this stretch bursts (1e6 for
+        // never), how deep past onset, and spiral (0) to bubble (1).
+        public float[] bdT;
+        public float[] bdDepth;
+        public float[] bdMode;
+
+        public float spacing;   // current ring spacing, metres
+
         public float seed;   // so the two wingtips never band identically
 
         public int count;
@@ -2372,6 +2647,12 @@ public class WingtipVortex : MonoBehaviour
         r.shed = new float[rings];
         r.odo = new float[rings];
         r.inDir = new Vector3[rings];
+        r.geVel = new Vector3[rings];
+        r.geFac = new float[rings];
+        r.bdT = new float[rings];
+        r.bdDepth = new float[rings];
+        r.bdMode = new float[rings];
+        r.spacing = ribbonMinPointDist;
         r.odometer = 0f;
         r.count = 0;
 
@@ -2440,6 +2721,11 @@ public class WingtipVortex : MonoBehaviour
         System.Array.Copy(r.shed, 0, r.shed, 1, n);
         System.Array.Copy(r.odo, 0, r.odo, 1, n);
         System.Array.Copy(r.inDir, 0, r.inDir, 1, n);
+        System.Array.Copy(r.geVel, 0, r.geVel, 1, n);
+        System.Array.Copy(r.geFac, 0, r.geFac, 1, n);
+        System.Array.Copy(r.bdT, 0, r.bdT, 1, n);
+        System.Array.Copy(r.bdDepth, 0, r.bdDepth, 1, n);
+        System.Array.Copy(r.bdMode, 0, r.bdMode, 1, n);
 
         // Toward the ROLL AXIS, decided now and never revisited.
         //
@@ -2466,8 +2752,57 @@ public class WingtipVortex : MonoBehaviour
         else
             r.inDir[0] = (r.count > 0) ? r.inDir[1] : -axLateral;   // degenerate: hold the last
 
+        // GROUND EFFECT for this ring. Height is the vessel's own height above the ground plus
+        // this point's offset from it along local up, which assumes the ground under the wingtip
+        // is level with the ground under the vessel — true to well under a metre across a span.
+        // Drift is horizontal and outboard: the inward direction flipped and flattened onto the
+        // ground plane, so a banked wing still drifts along the ground rather than into it.
+        r.geVel[0] = Vector3.zero;
+        r.geFac[0] = 0f;
+        if (frameGroundOn)
+        {
+            float h = Mathf.Max(frameAGL + Vector3.Dot(p - frameVesselPos, frameUp), 0f);
+            float b0sq = frameB0 * frameB0;
+            r.geFac[0] = groundEffectEnable * b0sq / (4f * h * h + b0sq);
+
+            Vector3 outward = -r.inDir[0];
+            outward -= frameUp * Vector3.Dot(outward, frameUp);
+            if (outward.sqrMagnitude > 1e-4f)
+            {
+                float hEff = Mathf.Max(h, 0.5f * frameB0);
+                float vOut = frameGamma / (4f * Mathf.PI) * b0sq / (hEff * (4f * hEff * hEff + b0sq));
+                r.geVel[0] = outward.normalized * (vOut * groundSpreadScale * groundEffectEnable);
+            }
+        }
+
+        r.bdT[0] = frameBreakT; r.bdDepth[0] = frameBreakDepth; r.bdMode[0] = frameBreakMode;
+
         r.pts[0] = p; r.birth[0] = now; r.shed[0] = shed * RibbonFlowVar(r, flowDepth); r.odo[0] = r.odometer;
         r.count = Mathf.Min(r.count + 1, r.pts.Length);
+    }
+
+    // r(t)/r0 = sqrt(1 + (4*alpha*nu_eff/r0^2) * t). Everything expensive is folded into
+    // coreGrowthRate once per frame, so what a ring or a width key pays is a multiply and a sqrt.
+    float CoreGrowth(float age)
+    {
+        return CoreGrowth(age, 1f);
+    }
+
+    // rateMult carries local extra eddy viscosity — the ground boundary layer — on top of the
+    // frame's rate.
+    float CoreGrowth(float age, float rateMult)
+    {
+        if (coreGrowthRate <= 0f) return 1f;
+        return Mathf.Min(Mathf.Sqrt(1f + coreGrowthRate * rateMult * Mathf.Max(age, 0f)), coreGrowthMax);
+    }
+
+    // The conservation half of the same event: whatever diffusion widens, this dims. Always
+    // paired with it, never applied on its own. See coreDimPow. Keyed on the growth it is handed
+    // rather than on coreGrowthRate, so breakdown's diffusion still dims with core growth off.
+    float CoreDim(float growth)
+    {
+        if (growth <= 1f) return 1f;
+        return Mathf.Pow(growth, -coreDimPow);
     }
 
     void BuildRibbonMesh(WakeRibbon r, float now, float widthScale, float contrailBlend, float life)
@@ -2491,6 +2826,15 @@ public class WingtipVortex : MonoBehaviour
 
         float rollup = Mathf.Clamp(vesselSize * rollupSizeScale, rollupMinMetres, rollupMaxMetres);
         float tailRatio = Mathf.Lerp(0.6f, 1.6f, contrailBlend);   // the tube spreads with age
+
+        // Breakdown geometry for this frame, in seconds and metres. Both floored by ring spacing:
+        // a bubble narrower than a few rings or a spiral turn shorter than eight simply cannot be
+        // drawn by this mesh, and would alias rather than read as small.
+        float spacingNow = Mathf.Max(r.spacing, 0.1f);
+        float bubbleWidthT = Mathf.Max(bubbleLengthCores * frameR0Vis, bubbleMinRings * spacingNow)
+                             / Mathf.Max(frameSpeed, 1f);
+        float spiralLambda = Mathf.Max(spiralWavelengthCores * frameR0Vis, spiralMinRingsPerTurn * spacingNow);
+        float groundCap = groundSpreadMaxSpans * vesselSpan;
 
         // Parallel transport. A naive Cross(tangent, up) frame flips violently wherever the
         // tangent passes near the reference axis; carrying the previous ring's normal forward and
@@ -2543,9 +2887,44 @@ public class WingtipVortex : MonoBehaviour
             float endFade = 1f - Mathf.Clamp01((endPos - (1f - ribbonEndFade)) / Mathf.Max(ribbonEndFade, 0.01f));
             endFade = endFade * endFade * (3f - 2f * endFade);
 
+            // tailRatio and CoreGrowth are separate on purpose and both belong here. The core
+            // itself only ever gets WIDER (diffusion is one-way), which is CoreGrowth; how much
+            // of that core is still condensed is what tailRatio carries, and in dry air that
+            // falls below 1 as the vapour evaporates and the pressure recovers. Visible radius is
+            // the product: a real core, times how much of it you can see.
+            float coreG = CoreGrowth(age, 1f + groundTurbScale * r.geFac[src]);
+
+            // BREAKDOWN. Everything past the burst scales with depth, and depth is continuous in
+            // swirl, so a stretch shed just past onset differs only slightly from one shed just
+            // short of it — no step between neighbouring rings. Past the burst: extra turbulent
+            // diffusion (paired with dimming like all diffusion), a bubble flare centred two
+            // widths downstream so it rises from nothing at the burst point, and a fade that
+            // is quick for a bubble and gentler for a spiral.
+            float bdP = age - r.bdT[src];
+            float bdDepth = r.bdDepth[src];
+            bool broken = bdP > 0f && bdDepth > 0f;
+            float bdDiff = 1f, bdFlare = 1f, bdFade = 1f, bdOnset = 0f, bdBubble = r.bdMode[src];
+            float bdSize = 0f;
+            if (broken)
+            {
+                bdOnset = 1f - Mathf.Exp(-bdP / Mathf.Max(breakdownDevelopTime, 0.01f));
+                bdSize = Mathf.Clamp01(bdDepth / Mathf.Max(breakdownSizeSaturateDepth, 0.01f));
+                bdSize = bdSize * bdSize * (3f - 2f * bdSize);
+                bdDiff = Mathf.Min(Mathf.Sqrt(1f + frameTurbRate * breakdownDiffusion * bdDepth * bdP),
+                                   breakdownGrowthMax);
+                if (bdBubble > 0f)
+                {
+                    float x = (bdP - 2f * bubbleWidthT) / Mathf.Max(bubbleWidthT, 0.001f);
+                    bdFlare = 1f + bubbleAmp * bdSize * bdBubble * Mathf.Exp(-x * x);
+                }
+                bdFade = Mathf.Exp(-bdP * bdDepth * Mathf.Lerp(spiralFadeRate, bubbleFadeRate, bdBubble));
+            }
+            float diffG = coreG * bdDiff;
+
             float radius = ribbonRadiusScale * r.shed[src] * widthScale
                            * Mathf.Lerp(headWidthFraction, 1f, grow)
                            * Mathf.Lerp(1f, tailRatio, ageFrac)
+                           * diffG * bdFlare
                            * endFade;
 
             // Full brightness across the peak window, then a taper spanning everything after it.
@@ -2553,7 +2932,8 @@ public class WingtipVortex : MonoBehaviour
             float fadeT = Mathf.Clamp01((ageFrac - ribbonPeakFraction)
                                         / Mathf.Max(1f - ribbonPeakFraction, 0.01f));
             float alpha = live
-                ? Mathf.Clamp01(r.shed[src] * trailAlphaGain * (1f - Mathf.Pow(fadeT, ribbonFadePow)) * endFade)
+                ? Mathf.Clamp01(r.shed[src] * trailAlphaGain * (1f - Mathf.Pow(fadeT, ribbonFadePow))
+                                * endFade * CoreDim(diffG) * bdFade)
                 : 0f;
             if (!live) radius = 0f;
 
@@ -2564,6 +2944,29 @@ public class WingtipVortex : MonoBehaviour
             float ease = Mathf.Clamp01(arc / Mathf.Max(ribbonInwardGrow, 0.01f));
             ease = ease * ease * (3f - 2f * ease);
             Vector3 centre = p + r.inDir[src] * (ribbonInwardAmp * r.shed[src] * ease);
+
+            // Ground-effect drift: zero at the head, opening linearly with the ring's own age.
+            if (r.geFac[src] > 0f)
+            {
+                Vector3 drift = r.geVel[src] * age;
+                if (drift.sqrMagnitude > groundCap * groundCap) drift = drift.normalized * groundCap;
+                centre += drift;
+            }
+
+            // Spiral breakdown. The basis is built from THIS ring's tangent and local up, not from
+            // the transported frame above: that frame is re-derived from the head every frame, so
+            // a turn at the wingtip would rotate it down the whole rope and set every corkscrew
+            // already laid writhing. A ring's own tangent does not change once it is laid.
+            if (broken && bdBubble < 1f)
+            {
+                Vector3 sN = Vector3.ProjectOnPlane(frameUp, tangent);
+                if (sN.sqrMagnitude < 1e-4f) sN = Vector3.ProjectOnPlane(Vector3.right, tangent);
+                sN.Normalize();
+                Vector3 sB = Vector3.Cross(tangent, sN);
+                float sAmp = spiralAmpCores * frameR0Vis * bdSize * (1f - bdBubble) * bdOnset;
+                float sPhase = (r.odo[src] / spiralLambda) * Mathf.PI * 2f + spiralPrecession * age + r.seed;
+                centre += (sN * Mathf.Cos(sPhase) + sB * Mathf.Sin(sPhase)) * sAmp;
+            }
 
             // Helix retained but inert at ribbonHelixAmp = 0.
             if (ribbonHelixAmp > 0f)
@@ -2992,12 +3395,22 @@ public class WingtipVortex : MonoBehaviour
         // every physics frame, so summing it is the real quantity rather than a proxy for it.
         // Dividing by weight keeps the result a load factor, so every threshold downstream
         // (the 3G onset, the 4.5G canard gate) keeps the meaning it was tuned with.
-        float liftKN = 0f;
-        for (int s = 0; s < liftSurfaces.Count; s++)
+        // Under FAR, ModuleLiftingSurface is gone from every patched part, so liftSurfaces is
+        // empty and there is nothing for the loop below to sum — read FARAPI's own force instead.
+        float liftKN;
+        if (FARBridge.Available)
         {
-            var ms = liftSurfaces[s];
-            if (ms == null) continue;   // Unity null check also catches destroyed parts
-            liftKN += ms.liftForce.magnitude;
+            liftKN = FARBridge.GetLiftKN(vessel, flow);
+        }
+        else
+        {
+            liftKN = 0f;
+            for (int s = 0; s < liftSurfaces.Count; s++)
+            {
+                var ms = liftSurfaces[s];
+                if (ms == null) continue;   // Unity null check also catches destroyed parts
+                liftKN += ms.liftForce.magnitude;
+            }
         }
         float weightKN = vesselMassTons * gravityAccel;
         float rawLiftG = (liftKN > 0f && weightKN > 0.001f)
@@ -3100,6 +3513,137 @@ public class WingtipVortex : MonoBehaviour
                                          / Mathf.Max(humidLiftShareFull - humidLiftShareMin, 0.01f));
         float approachFloor = humidFloor * depthBlend * loadBlend * shareBlend * flyingGate;
 
+        // VISCOUS CORE GROWTH. Scalar work, once per frame, resolving to a single rate in 1/s
+        // that both renderers then apply per ring or per key. See coreGrowthEnable.
+        coreGrowthRate = 0f;
+        // The same circulation the whole effect is keyed to: Gamma = L/(rho*V*b). Read from
+        // summed lift rather than felt G for the reasons given at massSpanFactor. Hoisted out of
+        // the core-growth block because ground effect and breakdown need it too, with or
+        // without core growth switched on.
+        float vRef = Mathf.Max(speed, 1f);
+        bool airOk = rho > 0.001f;
+        float gamma = airOk ? (liftKN * 1000f) / Mathf.Max(rho * vRef * vesselSpan, 0.001f) : 0f;
+        float r0 = Mathf.Max(coreSpanFraction * vesselSpan, 0.05f);
+
+        frameGamma = gamma;
+        frameSpeed = vRef;
+        frameB0 = 0.25f * Mathf.PI * Mathf.Max(vesselSpan, 0.1f);
+        frameR0Vis = r0;
+        frameUp = (Vector3)vessel.upAxis;
+        frameVesselPos = (Vector3)vessel.CoM;
+        frameTurbRate = 0f;
+
+        if (airOk)
+        {
+            float tK = Mathf.Max(ambientK, 1f);
+            float mu = sutherlandMu0 * Mathf.Pow(tK / sutherlandT0, 1.5f)
+                       * (sutherlandT0 + sutherlandS) / (tK + sutherlandS);
+            float nuRaw = mu / rho;                       // kinematic viscosity, m^2/s
+
+            float nuEff = Mathf.Min(nuRaw, nuMolecularCap)
+                          + squireDelta * gamma * (1f + ambientTurbScale * depthBlend);
+
+            frameTurbRate = (4f * lambOseenAlpha * nuEff) / (r0 * r0);
+            coreGrowthRate = coreGrowthEnable * frameTurbRate;
+
+            bool lowShot = coreGrowthEnable > 0f && !loggedCoreGrowth && intensity > 0.3f && speed > 60f;
+            bool highShot = coreGrowthEnable > 0f && !loggedCoreGrowthHigh && contrailBlend > 0.5f && intensity > 0.2f;
+            if (lowShot || highShot)
+            {
+                if (lowShot) loggedCoreGrowth = true; else loggedCoreGrowthHigh = true;
+                // Reported at the wake life this regime actually gets at a steady frame rate —
+                // the same lerp targetTime makes, maneuverTimeMax below the band and
+                // contrailTimeMax inside it. The previous form used contrailTimeMin for low
+                // altitude, which understated a 3.5 s wake as 2.5 s.
+                float wakeLife = Mathf.Lerp(maneuverTimeMax, contrailTimeMax, contrailBlend);
+                float gMid = CoreGrowth(wakeLife * 0.5f), gEnd = CoreGrowth(wakeLife);
+                Debug.Log($"[VORTEX] core growth ({(lowShot ? "low" : "band")}): T={tK:F0}K "
+                          + $"rho={rho:F3} cb={contrailBlend:F2} nu={nuRaw:E2} Gamma={gamma:F0}m2/s "
+                          + $"nuEff={nuEff:E2} r0={r0:F2}m rate={coreGrowthRate:F3}/s life={wakeLife:F1}s | "
+                          + $"mid: w x{gMid:F2} a x{CoreDim(gMid):F2} | "
+                          + $"tail: w x{gEnd:F2} a x{CoreDim(gEnd):F2}"
+                          + (gEnd >= coreGrowthMax - 0.001f ? "  <<< CLAMPED" : ""));
+            }
+        }
+
+        // GROUND EFFECT, vessel level. The raycast height sees the runway and KSC buildings where
+        // the PQS terrain height does not, so it is preferred — but only while it agrees with
+        // radar altitude to within 50 m. A raycast that has stopped updating would otherwise hold
+        // a low reading into the climb, and a low reading is the one direction that can fake
+        // ground effect. Over an ocean the sea surface is the ground plane, and a raycast that
+        // passed through the water to the seabed would read high.
+        {
+            double agl = vessel.radarAltitude;
+            if (vessel.heightFromTerrain >= 0f && System.Math.Abs(vessel.heightFromTerrain - agl) < 50.0)
+                agl = vessel.heightFromTerrain;
+            if (vessel.mainBody != null && vessel.mainBody.ocean)
+                agl = System.Math.Min(agl, vessel.altitude);
+            frameAGL = (float)agl;
+
+            frameGroundOn = groundEffectEnable > 0f && airOk && agl >= 0.0
+                            && agl < groundEffectCeilingSpans * Mathf.Max(vesselSpan, 1f);
+            float hV = Mathf.Max(frameAGL, 0f);
+            float b0sq = frameB0 * frameB0;
+            frameGroundFac = frameGroundOn ? groundEffectEnable * b0sq / (4f * hV * hV + b0sq) : 0f;
+
+            if (flyingGate > 0.9f && frameGroundFac > peakGroundFac) peakGroundFac = frameGroundFac;
+
+            // Either source of visible vapour counts: a gentle approach is lit by approachFloor
+            // with intensity near zero, and that is the landing this is most likely tested on.
+            if (!loggedGroundEffect && frameGroundFac > 0.3f && flyingGate > 0.9f
+                && (intensity > 0.2f || approachFloor > 0.05f))
+            {
+                loggedGroundEffect = true;
+                float hEff = Mathf.Max(hV, 0.5f * frameB0);
+                float vOut = gamma / (4f * Mathf.PI) * b0sq / (hEff * (4f * hEff * hEff + b0sq));
+                float w0 = gamma / (2f * Mathf.PI * frameB0);
+                float life = Mathf.Lerp(maneuverTimeMax, contrailTimeMax, contrailBlend);
+                Debug.Log($"[VORTEX] ground effect: AGL={hV:F1}m (raycast={vessel.heightFromTerrain:F1} "
+                          + $"radar={vessel.radarAltitude:F1}) b0={frameB0:F1}m h/b0={hV / frameB0:F2} "
+                          + $"factor={frameGroundFac:F2} Gamma={gamma:F0}m2/s | drift={vOut:F2}m/s "
+                          + $"(free descent {w0:F2}m/s) -> {Mathf.Min(vOut * life * groundSpreadScale, groundSpreadMaxSpans * vesselSpan):F1}m "
+                          + $"outboard over {life:F1}s | sink kept x{1f - frameGroundFac:F2} "
+                          + $"growth rate x{1f + groundTurbScale * frameGroundFac:F2}");
+            }
+        }
+
+        // BREAKDOWN, vessel level. Swirl is smoothed because Gamma reads raw lift, and a stretch
+        // of rope flickering in and out of breakdown would be exactly the popping this file has
+        // spent its whole history removing. Gated on flyingGate for the reason given at GROUND
+        // ROLL: on the runway the CL proxy reports gear attitude, not aerodynamics.
+        {
+            float swirlCoeff = 0.715f / (2f * Mathf.PI * Mathf.Max(viscousCoreSpanFraction, 0.001f));
+            float swirlRaw = (breakdownEnable > 0f && airOk && speed > flyingSpeedMin)
+                ? swirlCoeff * gamma / (Mathf.Max(vesselSpan, 0.1f) * vRef)
+                : 0f;
+            smoothedSwirl = Mathf.Lerp(smoothedSwirl, swirlRaw,
+                                       1f - Mathf.Exp(-dt / Mathf.Max(breakdownSmoothTime, 0.01f)));
+            float swirl = smoothedSwirl;
+
+            frameBreakDepth = breakdownEnable * flyingGate
+                              * Mathf.Clamp01((swirl - breakdownSwirlOnset)
+                                              / Mathf.Max(breakdownSwirlFull - breakdownSwirlOnset, 0.01f));
+            frameBreakMode = Mathf.Clamp01((swirl - bubbleSwirlMin)
+                                           / Mathf.Max(bubbleSwirlMax - bubbleSwirlMin, 0.01f));
+            float station = Mathf.Lerp(breakdownStationFarSpans, breakdownStationNearSpans, frameBreakDepth)
+                            * Mathf.Max(vesselSpan, 0.1f);
+            frameBreakT = frameBreakDepth > 0f ? station / vRef : 1e6f;
+
+            if (flyingGate > 0.9f && swirl > peakSwirl)
+            {
+                peakSwirl = swirl; peakSwirlSpeed = speed; peakSwirlGamma = gamma;
+            }
+
+            if (!loggedBreakdown && frameBreakDepth > 0.05f && intensity > 0.2f)
+            {
+                loggedBreakdown = true;
+                Debug.Log($"[VORTEX] breakdown engaged: swirl={swirl:F2} (onset {breakdownSwirlOnset:F2}) "
+                          + $"V={speed:F0}m/s Gamma={gamma:F0}m2/s clProxy={clProxy:F2} "
+                          + $"depth={frameBreakDepth:F2} mode={(frameBreakMode <= 0f ? "spiral" : frameBreakMode >= 1f ? "bubble" : "mixed " + frameBreakMode.ToString("F2"))} "
+                          + $"burst at {station:F0}m ({frameBreakT:F2}s) behind the tip");
+            }
+        }
+
         // The altitude ceiling is gone with the altitude band. Fading out as you leave the
         // atmosphere is atmFactor's job below, and air density is the physically right reason for
         // the effect to stop — it is also body-relative for free, where a metres-based ceiling
@@ -3190,6 +3734,15 @@ public class WingtipVortex : MonoBehaviour
                         if (trailSinkRate > 0f)
                         {
                             float rate = trailSinkRate * Mathf.Lerp(1f, sinkAgeFalloff, ageFrac);
+                            // Near the ground the image vortex cancels the descent, and the
+                            // cancellation tightens as the vertex gets lower, so a trail settles
+                            // toward the runway instead of sinking through it. Per vertex, from
+                            // its own height, since each has sunk a different distance.
+                            if (frameGroundOn)
+                            {
+                                float hv = Mathf.Max(frameAGL + Vector3.Dot(p - frameVesselPos, worldUp), 0f);
+                                rate *= (4f * hv * hv) / (4f * hv * hv + frameB0 * frameB0);
+                            }
                             p -= worldUp * (rate * sinkDt);
                         }
 
@@ -3518,6 +4071,7 @@ public class WingtipVortex : MonoBehaviour
                 float spacing = Mathf.Max(ribbonMinPointDist,
                                           (speed * life) / Mathf.Max(ribbonMaxPoints - 4, 1));
                 float flowDepth = ribbonFlowDepth * contrailBlend;
+                rb.spacing = spacing;
                 if (ribbonLive)
                 {
                     if (rb.count == 0) PushRibbonPoint(rb, anchorPos, now, visible, flowDepth);
@@ -3640,7 +4194,11 @@ public class WingtipVortex : MonoBehaviour
                 lr.startWidth = 0.15f * visible * lineFade * strengths[i] * finalScale;
                 lr.endWidth = 0.03f * visible * lineFade * strengths[i] * finalScale;
 
-                Gradient grad = new Gradient();
+                // Reused rather than `new Gradient()` here: this runs per line-mode source, every
+                // frame. SetKeys below overwrites its keys before lr.colorGradient reads them, and
+                // that assignment copies the data out, so sharing this one instance across sources
+                // and frames is safe.
+                Gradient grad = lineGradient;
 
                 // SPEED-BASED OPACITY (high altitude behavior)
                 float highSpeedFactor = Mathf.Clamp01((speed - 1000f) / 500f); // begins at 1000 m/s
@@ -3740,6 +4298,11 @@ public class WingtipVortex : MonoBehaviour
         // very end.
         float fadePow = Mathf.Lerp(1.0f, 1.5f, contrailBlend);
 
+        // Near-ground diffusion at the VESSEL's height, not per key. A trail stores no per-vertex
+        // history to freeze it in, and the trail path is rockets and secondaries, neither of which
+        // spends long enough near the ground for the difference to show.
+        float groundRateMult = 1f + groundTurbScale * frameGroundFac;
+
         // How much of the CURVE that roll-up distance corresponds to. The trail's live length is
         // its speed times the age span it currently covers, so the same few metres of taper stays
         // a few metres whether the trail behind is 50 m or 2.5 km.
@@ -3766,8 +4329,12 @@ public class WingtipVortex : MonoBehaviour
             float ramp = Mathf.Clamp01(u / rampFrac);
             ramp = ramp * ramp * (3f - 2f * ramp);
 
+            // Same split as the tube: tailRatio is how much of the core is still condensed,
+            // CoreGrowth is the core itself diffusing. u maps to real age through the span this
+            // geometry actually covers, which is what the growth law needs.
             widthKeys[k] = new Keyframe(u, shed
                                            * Mathf.Lerp(1f, tailRatio, u)
+                                           * CoreGrowth(Mathf.Lerp(headAge, tailAge, u), groundRateMult)
                                            * Mathf.Lerp(headWidthFraction, 1f, ramp));
         }
 
@@ -3782,8 +4349,10 @@ public class WingtipVortex : MonoBehaviour
             float shed = ShedAt(hist, u, headAge, tailAge);
             float fadeT = Mathf.Clamp01((u - ribbonPeakFraction)
                                         / Mathf.Max(1f - ribbonPeakFraction, 0.01f));
+            // Paired with the CoreGrowth applied to the width keys above, for the same reason.
+            float dim = CoreDim(CoreGrowth(Mathf.Lerp(headAge, tailAge, u), groundRateMult));
             shedAlphaKeys[k] = new GradientAlphaKey(
-                Mathf.Clamp01(shed * trailAlphaGain * (1f - Mathf.Pow(fadeT, fadePow))), u);
+                Mathf.Clamp01(shed * trailAlphaGain * (1f - Mathf.Pow(fadeT, fadePow)) * dim), u);
         }
 
         shedCurve.keys = widthKeys;

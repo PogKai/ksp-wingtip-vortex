@@ -153,7 +153,7 @@ Search `KSP.log` for `[VORTEX]` — the mod logs its full selection pass, includ
 **Wing vapor**
 
 * It is meant to be rare. It needs a real pull, humid low air and a wing working hard for its speed; below about 14 km on Kerbin only
-* To see what it is doing, create an empty file named `verbose.txt` in the mod's folder (next to `Plugins`), fly, and search `KSP.log` for `[VORTEX] wing vapor:` — part loading, step times, which parts are condensing, and each time the altitude limit is crossed. Without that file the mod logs one line per flight
+* To see what it is doing, create an empty file named `verbose.txt` in the mod's folder (next to `Plugins`), fly, and search `KSP.log` for `[VORTEX] wing vapor:` — part loading, step times, which parts are condensing, and each time the altitude limit is crossed. Without that file the wing vapor logs only a few lines when a flight starts (whether FAR was found, the version, and which particle shader it is using)
 * After five errors the wing vapor switches itself off for the flight and says so in the log; the vortices are unaffected
 
 **Nothing at altitude**

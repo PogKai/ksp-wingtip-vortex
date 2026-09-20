@@ -37,7 +37,7 @@ and the version.
 * **Lit by the scene.** White in sunlight, dimmed on the night side from the star's actual flux, using
   the same measure and night floor as the vortices.
 
-* **Diagnostics on request.** The mod logs one `[VORTEX] wing vapor:` line per flight. An empty
+* **Diagnostics on request.** Without it the wing vapor logs only a few `[VORTEX] wing vapor:` lines when a flight starts. An empty
   `verbose.txt` in the mod's folder turns on the detailed log: part loading, step times, which parts
   are condensing, and each crossing of the altitude limit.
 

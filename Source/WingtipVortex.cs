@@ -6,7 +6,7 @@ using System.Collections.Generic;
 [KSPAddon(KSPAddon.Startup.Flight, false)]
 public class WingtipVortex : MonoBehaviour
 {
-    public const string ModVersion = "1.1.0";
+    public const string ModVersion = "1.2.0";
 
     // MAGENTA IS UNITY SAYING "NO MATERIAL". These are static, so they outlive the addon but not
     // the scene: a Material created with `new Material(...)` and never marked DontDestroyOnLoad is

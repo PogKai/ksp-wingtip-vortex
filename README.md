@@ -8,7 +8,7 @@ Adds dynamic, geometry-aware wingtip vortices, and physics-based wing vapor, to 
 
 This mod generates wingtip vortices that react to how you’re flying and how your craft is built. It supports complex wing setups — multi-part wings, canted surfaces, forward canards — and, as of 1.1.0, vertically-launched rockets, whose fins are found radially rather than by which side of the centreline they sit on.
 
-As of 1.2.0 the mod also draws **wing vapor**: the white sheet that forms over a fighter's wings in a hard pull. It is worked out from the physics of the air over each lifting part — the pressure drop over the wing, the cooling that goes with it, and the water that condenses out — rather than from a list of triggers. See [Wing vapor](#wing-vapor).
+As of 1.2.0 the mod also draws **wing vapor**: the white sheet that forms over a fighter's wings in a hard pull. It is worked out from the physics of the air over each lifting part — the pressure drop over the wing, the cooling that goes with it, and the water that condenses out — rather than from a list of triggers. See [Wing vapor](#wing-vapor). The vortices themselves also gain real physics in 1.2.0: their cores spread the way a real wake's do, the ground pushes them apart, and a strongly loaded core can burst.
 
 Aircraft vortices are drawn with a procedural tube mesh that curves inward under mutual induction, the way a real counter-rotating vortex pair does, and that tube is the only renderer for those sources at any speed. Rockets use trail rendering throughout, which suits a craft that spends its whole ascent rotating.
 
@@ -35,6 +35,9 @@ Aircraft vortices are drawn with a procedural tube mesh that curves inward under
 * Scales with aircraft size
 * Robust against visual mods that use oversized renderer bounds
 * **Wing vapor** (1.2.0): a haze along the leading edge that spreads back over the wing as the pull tightens, from the real physics of the air over each wing section — see below
+* **Viscous core growth** (1.2.0): cores spread by Lamb-Oseen diffusion with Squire's eddy viscosity, so a heavy aircraft's wake stays a tight rope while a light one softens in seconds; widening is paired with dimming
+* **Ground effect** (1.2.0): near the ground the wake pair's descent is cancelled and the two vortices drift outboard, the way wake turbulence migrates onto parallel runways
+* **Vortex breakdown** (1.2.0): a core with too much swirl for its axial flow kinks into a spiral or bursts into a bubble, closer to the tip the harder the load
 
 ---
 
@@ -51,7 +54,7 @@ Aircraft vortices are drawn with a procedural tube mesh that curves inward under
 * Works alongside visual mods including Scatterer, EVE, Parallax, Deferred and Singularity
 * Works with Kopernicus and rescale mods — the atmosphere model reads each body's own curves
 * Supports modded aircraft, though detection depends on proper aero modules
-* **Not compatible with Ferram Aerospace Research.** FAR replaces the stock lifting modules that both the vortices and the wing vapor read, so neither appears under it
+* **Not compatible with Ferram Aerospace Research.** FAR replaces the stock lifting modules that vortex placement and the wing vapor detect, so neither appears under it. (When FAR is running the load factor is read from its own aerodynamic force, but that alone does not make it a supported configuration.)
 
 ---
 
@@ -149,6 +152,10 @@ Search `KSP.log` for `[VORTEX]` — the mod logs its full selection pass, includ
 * Ensure your craft has lifting/control surfaces
 * Ensure the craft is airborne — vortices are suppressed on the ground by design
 * Check the measurement line: `[VORTEX] measured <craft>: span=... mass=... sizeFactor=...`. A wildly wrong span means a mod's renderer got past the bounds filter; the log will name it.
+
+**Core growth, ground effect and breakdown**
+
+* Each logs a one-shot line the first time it engages (`[VORTEX] core growth`, `[VORTEX] ground effect`, `[VORTEX] breakdown engaged`), and `[VORTEX] session peaks` summarises the flight when you leave it — please include those lines in a report
 
 **Wing vapor**
 

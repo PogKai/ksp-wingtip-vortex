@@ -4,56 +4,100 @@ All notable changes to KSP Wingtip Vortex.
 
 ---
 
-## Unreleased — Wing vapor
+## 1.2.0 — Wing Vapor
 
-The mod now draws the other thing a fighter leaves in a hard pull: the white sheet over the wings.
-It is a second, independent effect in the same mod, worked out from the physics of the air over each
-wing section rather than from thresholds, and it shares nothing with the vortex code but the log tag
-and the version.
+1.1.0 taught the mod rockets. This release adds the other thing a fighter leaves in a hard pull, the
+white sheet over the wings, and gives the vortices themselves three pieces of real physics: their
+cores spread the way a real wake's do, the ground changes where they go, and a strongly loaded core
+can burst.
 
 ### Added
 
-* **Wing vapor.** Every lifting part is treated as a wing section. How hard it is working (its lift,
-  corrected for the other parts around it), how that load is spread along the chord (smoothly with the
-  camber, and piled into a suction peak behind the leading edge as the angle of attack grows, sharpened
-  toward Mach 1), the local pressure and temperature, and how moist the air is give the cooling the air
-  goes through crossing the wing. Where that takes it past its dew point, water condenses and the vapor
-  is drawn: a thin haze along the leading edge first, spreading back over the wing as the pull
-  tightens, thinner toward the tips, different on each wing in a bank.
+* **Wing vapor.** A second, independent effect in the same mod, worked out from the physics of the air
+  over each wing section rather than from thresholds. Every lifting part is treated as a wing section.
+  How hard it is working (its lift, corrected for the other parts around it), how that load is spread
+  along the chord (smoothly with the camber, and piled into a suction peak behind the leading edge as
+  the angle of attack grows, sharpened toward Mach 1), the local pressure and temperature, and how
+  moist the air is give the cooling the air goes through crossing the wing. Where that takes it past
+  its dew point, water condenses and the vapor is drawn: a thin haze along the leading edge first,
+  spreading back over the wing as the pull tightens, thinner toward the tips, different on each wing
+  in a bank.
 
-* **It is hard to get, and the reasons are physical.** A passenger jet at its structural limit shows a
-  faint trace at most; a fighter needs a real pull in humid air; a takeoff roll, cruise and a slow
-  approach show nothing. Slow, hard-working wings condense sooner than fast ones at the same load,
-  the way real ones do.
+* **Wing vapor is hard to get, and the reasons are physical.** A passenger jet at its structural limit
+  shows a faint trace at most; a fighter needs a real pull in humid air; a takeoff roll, cruise and a
+  slow approach show nothing. Slow, hard-working wings condense sooner than fast ones at the same
+  load, the way real ones do.
 
 * **A wing is many parts.** Stacked, clipped and canted parts are one wing; control surfaces are part
   of the section they sit in, so a hard-deflected aileron shifts its section by its share rather than
   acting as a whole airfoil. Parts buried inside a fuselage or an engine nacelle make no vapor.
 
-* **Hard altitude cutoff.** In air thinner than 10% of the body's sea-level density (about 14 km on
-  Kerbin, measured) there is no vapor and the wing-vapor code does no work at all, so orbit, space
-  stations and rockets cost nothing. Body-relative, like the vortices.
+* **Hard altitude cutoff for wing vapor.** In air thinner than 10% of the body's sea-level density
+  (about 14 km on Kerbin, measured) there is no vapor and the wing-vapor code does no work at all, so
+  orbit, space stations and rockets cost nothing. Body-relative, like the vortices.
 
-* **Lit by the scene.** White in sunlight, dimmed on the night side from the star's actual flux, using
-  the same measure and night floor as the vortices.
+* **Viscous core growth.** Both renderers already spread the wake with age through a tuned lerp; the
+  spreading now follows the real law. A vortex core grows as Lamb-Oseen says, r(t) = sqrt(r0² + 4αν t),
+  fed not by molecular viscosity (which is invisible, about two centimetres in five seconds) but by
+  Squire's eddy viscosity, proportional to the vortex's own circulation, so a heavy aircraft's wake
+  holds together as a tight rope while a light one goes soft in seconds. The molecular term uses
+  Sutherland's law on the real ambient temperature, and the lower atmosphere stirs the wake harder.
+  Circulation is conserved as the core spreads, so the widening is paired with a dimming: a core that
+  has doubled in radius is fainter, not a glowing cone. There is no laminar/turbulent switch, on
+  purpose: across every flight case that draws anything, the vortex Reynolds number is 10⁶ to 10⁸, so
+  the wake is always turbulent.
 
-* **Diagnostics on request.** Without it the wing vapor logs only a few `[VORTEX] wing vapor:` lines when a flight starts. An empty
-  `verbose.txt` in the mod's folder turns on the detailed log: part loading, step times, which parts
-  are condensing, and each crossing of the altitude limit.
+* **Ground effect.** A wall is modelled exactly by a mirror vortex of opposite sign beneath it. Near
+  the ground that cancels the pair's self-induced descent, pushes each vortex outboard (the reason
+  wake turbulence migrates onto parallel runways, and the visible signature: behind a low pass the two
+  ropes splay apart instead of running parallel), and raises near-ground diffusion. Trails settle
+  toward the runway instead of sinking through it. It changes where the rope goes and how fast it
+  diffuses; it never decides whether it is drawn, so short-final vapor is unaffected. Height comes
+  from the raycast where it agrees with radar altitude, and from the sea surface over an ocean.
+
+* **Vortex breakdown, in two modes.** A core with too much rotation for its axial flow stagnates on
+  its axis and bursts, as delta-wing vortices do. The swirl ratio (peak tangential over axial
+  velocity, from quantities the mod already has) sets when: a **spiral** near onset, where the core
+  kinks into a precessing corkscrew and disperses, and a **bubble** at higher swirl, an abrupt bulge
+  after which the core is gone. The burst point moves toward the tip as swirl rises, and everything
+  scales with depth past onset, so there is no step between neighbouring stretches of rope. Thresholds
+  are from Spall, Gatski and Grosch (1987).
+
+* **FAR: lift is read from FAR's own force.** When Ferram Aerospace Research is running, the load factor
+  is read from the vessel's aerodynamic force through FARAPI (bound by reflection, no dependency)
+  instead of from stock lift modules FAR removes, which used to degrade it silently to felt G. A missing
+  or incompatible FAR leaves the mod exactly as before. **FAR remains unsupported**: vortex placement
+  and the wing vapor still detect the stock lifting and control-surface modules.
+
+* **Lit by the scene.** Wing vapor is white in sunlight and dimmed on the night side from the star's
+  actual flux, using the same measure and night floor as the vortices.
+
+* **Diagnostics.** Wing vapor logs only a few `[VORTEX] wing vapor:` lines when a flight starts; an
+  empty `verbose.txt` in the mod's folder turns on the detailed log (part loading, step times, which
+  parts are condensing, each crossing of the altitude limit). The wake physics logs a one-shot line
+  per effect when it first engages (`core growth`, `ground effect`, `breakdown engaged`), and a
+  `session peaks` summary on leaving the flight scene, so the thresholds can be checked against real
+  flights.
+
+### Changed
+
+* Line mode reuses one gradient instead of allocating a new one per source per frame.
 
 ### Notes
 
-* **FAR is not supported**, as for the vortices: it replaces the stock lifting modules the wing vapor
-  reads.
-* KSP has no weather, so how moist the air is a stand-in (a fixed dew-point spread: 12 K in the humid
-  lowest layer, 18 K above it).
+* **Wing vapor needs stock aerodynamics** (`ModuleLiftingSurface`), as the vortices do.
+* KSP has no weather, so how moist the air is a stand-in for wing vapor: a fixed dew-point spread
+  (12 K in the humid lowest layer, 18 K above it).
 * A surface lifting against the aircraft's net lift (a tailplane trimming the aircraft, a canard set
-  against the wing) makes no vapor. KSP loads these far harder than a real aircraft would, and they
-  looked like artifacts. This is a style choice, not physics.
-* Cost: on a 137-part fighter in hard turns its physics averaged under 2.5 ms per physics step, and
-  drawing it about a quarter of a millisecond a frame. Larger craft are updated every 2 to 4 physics
-  steps, which its own smoothing hides. One particle system per aircraft, capped, with no extra assets:
-  KSP's own particle shader and a texture generated in code.
+  against the wing) makes no wing vapor. KSP loads these far harder than a real aircraft would, and
+  they looked like artifacts. This is a style choice, not physics.
+* Wing vapor cost: on a 137-part fighter in hard turns its physics averaged under 2.5 ms per physics
+  step, and drawing it about a quarter of a millisecond a frame. Larger craft are updated every 2 to 4
+  physics steps, which its own smoothing hides. One particle system per aircraft, capped, with no
+  extra assets: KSP's own particle shader and a texture generated in code.
+* The breakdown thresholds are literature values applied to a swirl estimate built on an assumed core
+  size. The `session peaks` line reports what real flights reach, which is what will say whether they
+  are in the right place.
 
 ---
 

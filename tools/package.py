@@ -10,6 +10,7 @@ Writes dist/WingtipVortex_<version>.zip in the layout KSP mods are installed in:
     GameData/WingtipVortex/Plugins/WingtipVortex.dll
     GameData/WingtipVortex/Source/WingtipVortex.cs, Source/WingVapor/*.cs
     GameData/WingtipVortex/README.md, CHANGELOG.md, license.md
+    GameData/WingtipVortex/docs/*.md, docs/images/*
 
 then reads the zip back and checks that the DLL inside is the one just built. Refuses to run when
 
@@ -76,6 +77,11 @@ def main():
     files = {root + "Plugins/" + NAME + ".dll": dll}
     for doc in ("README.md", "CHANGELOG.md", "license.md"):
         files[root + doc] = os.path.join(ROOT, doc)
+    for sub in ("docs", os.path.join("docs", "images")):
+        folder = os.path.join(ROOT, sub)
+        for name in sorted(os.listdir(folder)):
+            if os.path.isfile(os.path.join(folder, name)):
+                files[root + sub.replace(os.sep, "/") + "/" + name] = os.path.join(folder, name)
     files[root + "Source/WingtipVortex.cs"] = os.path.join(ROOT, "Source", "WingtipVortex.cs")
     vapor = os.path.join(ROOT, "Source", "WingVapor")
     for name in sorted(os.listdir(vapor)):

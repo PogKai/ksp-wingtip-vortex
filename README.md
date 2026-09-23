@@ -6,7 +6,7 @@
 
 [![Release](https://img.shields.io/github/v/release/PogKai/ksp-wingtip-vortex?style=flat-square&label=release&color=2b7bb9)](https://github.com/PogKai/ksp-wingtip-vortex/releases/latest)
 [![KSP](https://img.shields.io/badge/KSP-1.12.x-4c9a4c?style=flat-square)](#install)
-[![License](https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square)](license.md)
+[![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey?style=flat-square)](license.md)
 
 **[Download](https://github.com/PogKai/ksp-wingtip-vortex/releases/latest)**
 &nbsp;·&nbsp; [Forum thread](https://forum.kerbalspaceprogram.com/topic/230208-ksp-vorticescontrails-mod-release/#comment-4508713)
@@ -64,9 +64,49 @@ KSP 1.12.x · no dependencies · to upgrade, replace the folder · to remove, de
 
 <br>
 
+## License
+
+[CC BY-NC-SA 4.0](license.md): free to use and share, never to sell. You can:
+
+| | |
+|---|---|
+| **Use it** | In your own game, videos, streams and screenshots |
+| **Change it** | Fork it, modify it, fix it, build on it |
+| **Share it** | Redistribute it, or bundle it in a free modpack |
+| **Reuse the code** | Put any part of it in your own free mods and projects |
+
+As long as you:
+
+* **Credit PogKai** and link back to this repository
+* **Don't sell it**, or anything built from it, or put it behind a paywall
+* **Use the same license** for anything you share that's built from it
+
+Versions up to 1.2.0 were released under MIT and stay under it. Everything after is CC BY-NC-SA 4.0.
+
+<br>
+
+## Free, always
+
+Every version of this mod is free. I have never charged for it and never will. If you paid for it anywhere, that money didn't go to me. Get it from the [official releases](https://github.com/PogKai/ksp-wingtip-vortex/releases) or the [forum thread](https://forum.kerbalspaceprogram.com/topic/230208-ksp-vorticescontrails-mod-release/#comment-4508713).
+
+<br>
+
+## AI disclosure
+
+This mod was built with help from Claude, Anthropic's AI assistant.
+
+| | |
+|---|---|
+| **With Claude** | Research support, baseline code, and debugging |
+| **Me (PogKai)** | The ideas and the direction of the project, my own research, core integration into KSP, and all in-game testing |
+
+Every feature was tested and tuned by hand in game before it shipped.
+
+<br>
+
 <div align="center">
 
-MIT licensed · by PogKai
+CC BY-NC-SA 4.0 · by PogKai
 
 </div>
 

@@ -27,15 +27,16 @@ For every lifting part, every physics step:
 * **It is hard to get.** A passenger jet at its structural limit shows a faint trace at most. A fighter needs a real pull in humid air. A takeoff roll, cruise or a slow approach shows nothing
 * Slow, hard-working wings condense sooner than fast ones at the same load, and wings near Mach 1 sooner still, as real ones do
 * Different on each wing in a bank
-* White in sunlight and dimmed on the night side, from the star's actual flux, so eclipses and planet shadow are handled
+* White in sunlight and dimmed on the night side, fading through twilight by the sun's height above the craft's horizon, so a high craft stays lit after the ground goes dark. Eclipses are handled
 * Parts buried inside a fuselage or an engine nacelle make no vapor
 
 ## Limits, on purpose
 
 * **Lower atmosphere only.** Air thinner than 10% of the body's sea-level density (about 14 km on Kerbin) has a hard cutoff: no vapor, and the wing-vapor code does no work at all, so orbit and space stations cost nothing
 * **A surface lifting against the aircraft's net lift makes no vapor**: a tailplane trimming the aircraft, a canard set against the wing. KSP loads these far harder than a real aircraft would, and they looked like artifacts. This is a style choice, not physics
+* **A roll control surface condenses only from the load it shares with its mirror twin**: a taileron, elevon or all-moving stabilator. A pure roll deflects the two halves equal and opposite, so neither fogs; a pull loads both alike, so both do. Stock gives a small, fully deflected surface far more lift than a real tail carries. Also a style choice
 * **KSP has no weather**, so the air's moisture is a stand-in: a fixed dew-point spread (12 K in the humid lowest layer, 18 K above it). It does not follow the time of day
-* Wing vapor is drawn on the active vessel only, as a particle effect: not volumetric, no shadows
+* Wing vapor is drawn on the craft you fly only (the vortices are drawn on every aircraft around you), as a particle effect: not volumetric, no shadows. When BDArmory's camera follows a fired missile, the vapor stays on the aircraft that fired it
 * Needs stock aerodynamics (`ModuleLiftingSurface`). Under Ferram Aerospace Research no vapor appears
 
 ## Performance

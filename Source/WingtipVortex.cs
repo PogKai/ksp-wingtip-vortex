@@ -3,10 +3,25 @@ using KSP;
 using System.Collections;
 using System.Collections.Generic;
 
-[KSPAddon(KSPAddon.Startup.Flight, false)]
+// One per craft, created and destroyed by WingtipVortexManager (bottom of this file) and bound to
+// that craft for its whole life. Switching vessels therefore touches no wake: the craft you leave
+// keeps drawing its own, and the one you take over already has one.
 public class WingtipVortex : MonoBehaviour
 {
-    public const string ModVersion = "1.2.0";
+    public const string ModVersion = "1.3.0";
+
+    // The craft this controller draws. Set by the manager immediately after AddComponent, which
+    // is before Start() runs.
+    public Vessel target;
+
+    // Captured at Start, so lines logged from OnDestroy after the craft is gone keep their tag.
+    // Localised: stock craft carry names like "#autoLOC_501256".
+    private string logLabel;
+
+    void Log(string msg)
+    {
+        Debug.Log(logLabel != null ? $"[VORTEX] [{logLabel}] {msg}" : "[VORTEX] " + msg);
+    }
 
     // MAGENTA IS UNITY SAYING "NO MATERIAL". These are static, so they outlive the addon but not
     // the scene: a Material created with `new Material(...)` and never marked DontDestroyOnLoad is
@@ -196,10 +211,23 @@ public class WingtipVortex : MonoBehaviour
     // Replaced with an explicit peak window plus a taper over the remainder, which is both what
     // was asked for and closer to the physics: the core is tightest and brightest right at the
     // tip, and condensation thins out progressively as the core diffuses and pressure recovers.
-    // ribbonPeakFraction is the share of the rope held at full brightness; the rest fades across
-    // the whole remaining length rather than cramming the transition into the last third.
-    private float ribbonPeakFraction = 0.12f;   // share of the rope at full brightness
+    // ribbonPeakFraction is the age at which the fade begins; the rest fades across the whole
+    // remaining length rather than cramming the transition into the last third. The head ramp
+    // below now supplies the variation near the tip that the old short peak window did.
+    private float ribbonPeakFraction = 0.45f;   // age at which the tail fade begins
     private float ribbonFadePow = 1.1f;
+
+    // HEAD RAMP. The rope used to leave the anchor already at peak alpha: a thin thread, but a
+    // fully white one, which read as a line stuck onto the wingtip rather than vapour forming
+    // behind it. Condensation in a real tip vortex starts wispy and thickens as the core rolls up
+    // and its pressure drop deepens, and the opacity of a condensed tube goes with the path
+    // length through it — its width — so a thread should also be faint. Both now rise from near
+    // nothing over the first ribbonHeadRampFraction of the rope, alpha with an ease-out so the
+    // rope is readable before it is wide. Keyed to position in the buffer for the same reason
+    // as ribbonEndFade. ribbonPeakFraction sits just past the ramp so the brightest stretch is
+    // mid-rope, not a plateau from the tip.
+    private float ribbonHeadRampFraction = 0.40f;
+    private float ribbonHeadWidthFloor = 0.15f; // width at the anchor, as a share of full
 
     // Fraction of the rope over which the tail closes to nothing. Keyed to POSITION IN THE
     // BUFFER, not to age, and that distinction is the fix: once the ring budget is what limits
@@ -314,11 +342,19 @@ public class WingtipVortex : MonoBehaviour
     //    zero either: planetshine and starlight are not nothing, and a wake that vanished
     //    outright would read as a bug.
     //
-    // vessel.solarFlux already accounts for occlusion by the body, so this keeps the good case
-    // for free: a craft at altitude still sees the sun after the ground below it has gone dark,
-    // which is exactly when real contrails are at their most striking.
+    // 4. It dimmed every afternoon, not just the night. vessel.solarFlux includes the atmosphere's
+    //    absorption along the sun's path, so it falls steeply as the sun gets low: a late
+    //    afternoon at KSC read as 20-45% lit under a still-bright sky and drew the wake at a half
+    //    to a third of its midday strength, where an additive trail is hardest to see anyway.
+    //    Point 3 is about the sky going dark, which follows the sun's elevation, so the light now
+    //    comes from VortexVapor.Sunlight: 1 with the sun above the craft's own horizon, fading
+    //    through twilight. The horizon dips with altitude, so a craft up high still sees the sun
+    //    after the ground below it has gone dark, which is when real contrails are most striking.
+    //
+    // dayLightScale was 0.75 when full daylight still read about 0.85 through the atmosphere,
+    // which drew a midday wake at about 0.66; 0.70 keeps that look now that daylight reads 1.
     private float nightFloorScale = 0.20f;   // ambient floor in full shadow
-    private float dayLightScale = 0.75f;     // brightness in full daylight; 1.0 for no dimming
+    private float dayLightScale = 0.70f;     // brightness in full daylight; 1.0 for no dimming
     private bool loggedSunFlux = false;
     private bool loggedSecondaryGate = false;
     private bool loggedTrailMat = false;
@@ -827,8 +863,14 @@ public class WingtipVortex : MonoBehaviour
     private float breakdownSizeSaturateDepth = 0.3f;
     // Spiral geometry, in visible core radii so it scales with the airframe. The minimum rings
     // per turn stops a short wavelength aliasing into a polygon on coarse ring spacing.
-    private float spiralAmpCores = 1.5f;
-    private float spiralWavelengthCores = 10f;
+    // Tuned down from 1.5 / 10 after in-flight review: a pull only ever gets just past onset
+    // (logged depth ~0.05), where size is already saturated but the depth-scaled fade is nearly
+    // zero, so the old values laid a regular coil hundreds of metres long. Seen along the rope
+    // with any foreshortening it read as loops. A real spiral breakdown is a kink that throws a
+    // turn or two and then disperses; spiralDecayTurns bounds it to that, independent of depth.
+    private float spiralAmpCores = 0.5f;
+    private float spiralWavelengthCores = 20f;
+    private float spiralDecayTurns = 1.5f;      // e-folding of the displacement, in wavelengths
     private float spiralMinRingsPerTurn = 8f;
     private float spiralPrecession = 1.5f;      // rad/s; 0 freezes the corkscrew in the air
     private float spiralFadeRate = 0.8f;        // 1/s at full depth
@@ -1210,11 +1252,13 @@ public class WingtipVortex : MonoBehaviour
         // the race and measured a vessel that was loaded but still packed. Wrong bounds, wrong
         // length axis, wrong tips — baked in for the rest of the flight, because detection
         // never runs again.
+        if (target != null) logLabel = KSP.Localization.Localizer.Format(target.vesselName);
         float waited = 0f;
         while (waited < sourceReadyTimeout)
         {
-            Vessel v = FlightGlobals.ActiveVessel;
-            if (FlightGlobals.ready && v != null && v.loaded && !v.packed
+            Vessel v = target;
+            if (v == null) yield break;   // gone before it was ever ready; the manager reaps us
+            if (FlightGlobals.ready && v.loaded && !v.packed
                 && v.rootPart != null && v.parts != null && v.parts.Count > 0)
                 break;
             waited += Time.unscaledDeltaTime;
@@ -1226,21 +1270,26 @@ public class WingtipVortex : MonoBehaviour
         for (int f = 0; f < sourceSettleFrames; f++)
             yield return new WaitForFixedUpdate();
 
-        vessel = FlightGlobals.ActiveVessel;
+        vessel = target;
         if (vessel == null || !vessel.loaded)
         {
-            Debug.Log($"[VORTEX] no ready vessel after {waited:F1}s — not starting");
+            Log($"no ready vessel after {waited:F1}s — not starting");
             yield break;
         }
         vesselTransform = vessel.transform;
 
-        Debug.Log($"[VORTEX] WingtipVortex v{ModVersion} starting "
+        Log($"WingtipVortex v{ModVersion} starting "
                   + $"(vessel ready after {waited:F1}s, packed={vessel.packed})");
 
         FARBridge.Init();
         TrailMat();
         LineMat();
 
+        // Defensive: before per-craft controllers, Update()'s active-vessel check built sources
+        // while this coroutine waited and this pass added a second set on top (4 sources on a
+        // 2-tip craft, kept all flight by a craft that started airborne). Nothing builds early
+        // any more, but a stray set here would double every wake, so start from none.
+        ClearSources();
         ComputeVesselBounds();
         FindVortexSources();
 
@@ -1262,7 +1311,7 @@ public class WingtipVortex : MonoBehaviour
             yield return new WaitForSeconds(sourceConfirmDelay);
             if (vessel != null && vessel.loaded && !vessel.packed && vessel.LandedOrSplashed)
             {
-                Debug.Log("[VORTEX] confirmation re-detect (still on the ground)");
+                Log("confirmation re-detect (still on the ground)");
                 ClearSources();
                 ComputeVesselBounds();
                 FindVortexSources();
@@ -1319,7 +1368,7 @@ public class WingtipVortex : MonoBehaviour
         // Calibration summary, whether or not either effect ever fired. See peakSwirl.
         if (peakSwirl > 0f || peakGroundFac > 0f)
         {
-            Debug.Log($"[VORTEX] session peaks: swirl={peakSwirl:F2} at V={peakSwirlSpeed:F0}m/s "
+            Log($"session peaks: swirl={peakSwirl:F2} at V={peakSwirlSpeed:F0}m/s "
                       + $"Gamma={peakSwirlGamma:F0}m2/s (breakdown onset {breakdownSwirlOnset:F2}, "
                       + $"bubble from {bubbleSwirlMin:F2}) | ground factor={peakGroundFac:F2}");
         }
@@ -1647,9 +1696,9 @@ public class WingtipVortex : MonoBehaviour
         // full ones, which made a 9.4 m fuselage read as 4.7 m against an 8.9 m height.
         // Part spread is printed alongside, because it is what actually chose the axis and a
         // small margin there is the signature of the bug this replaced.
-        Debug.Log($"[VORTEX] axes resolved — nose={(axLengthSigned ? "known" : "UNKNOWN")} " +
+        Log($"axes resolved — nose={(axLengthSigned ? "known" : "UNKNOWN")} " +
                   $"length={ExtentAlong(vesselBounds, axLength) * 2f:F1}m " +
-                  $"span={ExtentAlong(vesselBounds, axLateral) * 2f:F1}m " +
+                  $"span={vesselSpan:F1}m " +   // frame-true; length and height are the world box
                   $"height={ExtentAlong(vesselBounds, axVert) * 2f:F1}m " +
                   $"(part spread fwd={fwdSpread:F1}m up={upSpread:F1}m"
                   + (haveSpread ? "" : ", FALLBACK to bounds")
@@ -1699,7 +1748,7 @@ public class WingtipVortex : MonoBehaviour
 
         bodyContrailCold = Mathf.Max(contrailTempCold, minT);
         bodyContrailWarm = Mathf.Max(contrailTempWarm, bodyContrailCold + contrailBandMin);
-        Debug.Log($"[VORTEX] contrail band on {body.bodyName}: air {minT:F1}-{maxT:F1}K, "
+        Log($"contrail band on {body.bodyName}: air {minT:F1}-{maxT:F1}K, "
                   + $"band {bodyContrailCold:F1}->{bodyContrailWarm:F1}K, "
                   + $"rho_ASL {body.atmDensityASL:F3}");
     }
@@ -1729,7 +1778,8 @@ public class WingtipVortex : MonoBehaviour
 
     // Renderer bounds for one part, with everything that is not part geometry rejected. Used by
     // every measurement in this file, so the rejection happens once and applies everywhere.
-    bool TryGetPartBounds(Part p, out Bounds bounds)
+    // `accepted`, when given, collects the renderers that passed, for PartLateralRange.
+    bool TryGetPartBounds(Part p, out Bounds bounds, List<Renderer> accepted = null)
     {
         bounds = new Bounds();
         if (p == null) return false;
@@ -1773,7 +1823,7 @@ public class WingtipVortex : MonoBehaviour
                 if (!rogueRendererLogged)
                 {
                     rogueRendererLogged = true;
-                    Debug.Log($"[VORTEX] ignoring oversized renderer '{r.name}' on part={p.name} "
+                    Log($"ignoring oversized renderer '{r.name}' on part={p.name} "
                               + $"size={s.magnitude:F0}m — it is not part geometry "
                               + "(visual mods use huge bounds to defeat frustum culling)");
                 }
@@ -1781,8 +1831,58 @@ public class WingtipVortex : MonoBehaviour
             }
 
             if (!any) { bounds = b; any = true; } else bounds.Encapsulate(b);
+            if (accepted != null) accepted.Add(r);
         }
         return any;
+    }
+
+    // A part's reach along the craft's own lateral axis, widening [lo, hi]. Renderer.bounds is
+    // a box aligned to the WORLD axes, so projecting it onto the craft's axes is only tight while
+    // the craft is lined up with the world. On the runway it roughly is; banked, turned or pitched
+    // in flight it is not, and span came out up to 1.8x (Su-33 at 19.7 m against 12.1 m, when
+    // switched to mid-match). Span sets the circulation, the core size and the swirl, so the same
+    // jet looked different depending on how it happened to be oriented when measured, and
+    // BDArmory spawns every AI craft in the air. A mesh's own bounds are in its local frame and
+    // rotate with it, so their corners are exact whatever the attitude.
+    static readonly List<Renderer> lateralScratch = new List<Renderer>();
+    void PartLateralRange(Part p, ref float lo, ref float hi)
+    {
+        lateralScratch.Clear();
+        Bounds wb;
+        if (!TryGetPartBounds(p, out wb, lateralScratch)) return;
+        Vector3 origin = vesselTransform.position, right = vesselTransform.right;
+        for (int i = 0; i < lateralScratch.Count; i++)
+        {
+            Renderer r = lateralScratch[i];
+            MeshFilter mf = r is MeshRenderer ? r.GetComponent<MeshFilter>() : null;
+            Transform space;
+            Bounds lb;
+            if (mf != null && mf.sharedMesh != null) { lb = mf.sharedMesh.bounds; space = r.transform; }
+            else { lb = r.bounds; space = null; }   // skinned or other: the world box, as before
+            Vector3 c = lb.center, e = lb.extents;
+            for (int k = 0; k < 8; k++)
+            {
+                Vector3 q = c + new Vector3((k & 1) != 0 ? e.x : -e.x, (k & 2) != 0 ? e.y : -e.y, (k & 4) != 0 ? e.z : -e.z);
+                if (space != null) q = space.TransformPoint(q);
+                float x = Vector3.Dot(q - origin, right);
+                if (x < lo) lo = x;
+                if (x > hi) hi = x;
+            }
+        }
+    }
+
+    // How far a part reaches from the centreline, in the craft's frame (see PartLateralRange).
+    // The candidate ranking and the climb gate used |centre| + the world box's extent, which
+    // inflated with attitude: a BDArmory-spawned F-22 put delta.small at 6.47 m on a 10.7 m span
+    // and moved both anchors onto it from the wingtip it sits in a dead heat with when level.
+    float LateralReach(Part p, Bounds worldB)
+    {
+        float lo = float.MaxValue, hi = float.MinValue;
+        PartLateralRange(p, ref lo, ref hi);
+        if (hi < lo)
+            return Mathf.Abs(Vector3.Dot(worldB.center - vesselTransform.position, vesselTransform.right))
+                   + ExtentAlong(worldB, vesselTransform.right);
+        return Mathf.Max(Mathf.Abs(lo), Mathf.Abs(hi));
     }
 
     // True once every renderer has finished aging out, so the vacuum early-out above can tell
@@ -1820,7 +1920,17 @@ public class WingtipVortex : MonoBehaviour
         // Clamped as a last line of defence. Belt and braces with the rejection above: if some
         // future mod finds a way past it, the effect degrades to wrong-looking rather than to
         // invisible, and the log below says so.
-        vesselSpan = Mathf.Clamp(ExtentAlong(vesselBounds, vesselTransform.right) * 2f, 1f, 500f);
+        // Span in the craft's own frame (see PartLateralRange), not off the world-aligned box.
+        float latLo = float.MaxValue, latHi = float.MinValue;
+        foreach (var part in vessel.parts)
+        {
+            if (part == null) continue;
+            float x = Vector3.Dot(part.transform.position - vesselTransform.position, vesselTransform.right);
+            if (x < latLo) latLo = x;
+            if (x > latHi) latHi = x;
+            PartLateralRange(part, ref latLo, ref latHi);
+        }
+        vesselSpan = Mathf.Clamp(latHi > latLo ? latHi - latLo : 0f, 1f, 500f);
         vesselMassTons = Mathf.Max(vessel.GetTotalMass(), 0.001f);
         float sizeRatio = (vesselMassTons / vesselSpan) / (refMass / refSpan);
         sizeFactor = (2f * sizeRatio) / (1f + Mathf.Max(sizeRatio, 0f));
@@ -1828,7 +1938,7 @@ public class WingtipVortex : MonoBehaviour
         if (!boundsLogged)
         {
             boundsLogged = true;
-            Debug.Log($"[VORTEX] measured {vessel.vesselName}: span={vesselSpan:F1}m "
+            Log($"measured: span={vesselSpan:F1}m "
                       + $"size={vesselSize:F1}m mass={vesselMassTons:F1}t sizeFactor={sizeFactor:F2}");
         }
 
@@ -1874,7 +1984,7 @@ public class WingtipVortex : MonoBehaviour
         // Resolve the vessel's geometric frame before anything is measured against it.
         ComputeVesselAxes();
 
-        Debug.Log("[VORTEX] === AERO INVENTORY ===");
+        Log("=== AERO INVENTORY ===");
         foreach (Part p in vessel.parts)
         {
             if (p == null) continue;
@@ -1887,9 +1997,9 @@ public class WingtipVortex : MonoBehaviour
             Vector3 lp = ToVesselFrame(p.transform.position);
             Bounds ib;
             float ai = TryGetPartBounds(p, out ib) ? ib.size.x * ib.size.z : 0f;
-            Debug.Log($"[VORTEX] AERO part={p.name} fwd={lp.z:F2} lat={lp.x:F2} vert={lp.y:F2} area={ai:F2} lift={hasLift} ctrl={hasCtrl}");
+            Log($"AERO part={p.name} fwd={lp.z:F2} lat={lp.x:F2} vert={lp.y:F2} area={ai:F2} lift={hasLift} ctrl={hasCtrl}");
         }
-        Debug.Log("[VORTEX] === END INVENTORY ===");
+        Log("=== END INVENTORY ===");
 
         // Sectors are computed for EVERY craft, before either selection path, so the log shows
         // what the unified rule would do on aircraft and rockets alike. Consumed only when
@@ -1901,7 +2011,7 @@ public class WingtipVortex : MonoBehaviour
         if (useSectorSelection)
         {
             FindSourcesBySector(radialPool, sectors);
-            Debug.Log($"[VORTEX] {trails.Count} vortex source(s) created (sector pass)");
+            Log($"{trails.Count} vortex source(s) created (sector pass)");
             return;
         }
 
@@ -1919,7 +2029,7 @@ public class WingtipVortex : MonoBehaviour
             bool noseUp = vessel.LandedOrSplashed && noseUpDot > rocketNoseUpDot;
 
             verticalLauncher = (slender || noseUp) ? 1 : 0;
-            Debug.Log($"[VORTEX] craft shape: along={lenSpread:F1}m across={latSpread:F1}m "
+            Log($"craft shape: along={lenSpread:F1}m across={latSpread:F1}m "
                       + $"ratio={lenSpread / Mathf.Max(latSpread, 0.01f):F1} slender={slender} "
                       + $"noseUp={noseUp} (dot={noseUpDot:F2}) — "
                       + $"{(verticalLauncher == 1 ? "VERTICAL LAUNCHER" : "aircraft")}");
@@ -1928,7 +2038,7 @@ public class WingtipVortex : MonoBehaviour
         {
             if (skipVerticalLaunchers)
             {
-                Debug.Log("[VORTEX] vertical launcher — skipped by skipVerticalLaunchers");
+                Log("vertical launcher — skipped by skipVerticalLaunchers");
                 return;
             }
             FindRocketFinSources();
@@ -1940,7 +2050,7 @@ public class WingtipVortex : MonoBehaviour
 
         if (pool.Count == 0)
         {
-            Debug.Log("[VORTEX] no qualifying lifting surfaces — no vortices");
+            Log("no qualifying lifting surfaces — no vortices");
             return;
         }
 
@@ -1949,7 +2059,7 @@ public class WingtipVortex : MonoBehaviour
         // rather than something that emerges from two heuristics agreeing.
         pool.Sort((a, b) => b.extremity.CompareTo(a.extremity));
         foreach (var c in pool)
-            Debug.Log($"[VORTEX] CANDIDATE part={c.part.name} side={(c.isLeft ? "L" : "R")} ext={c.extremity:F2} z={c.z:F2}");
+            Log($"CANDIDATE part={c.part.name} side={(c.isLeft ? "L" : "R")} ext={c.extremity:F2} z={c.z:F2}");
 
         // ── MAIN WING: furthest-reaching surface on each side ───────────
         AeroCandidate mainLeft = BestOnSide(pool, true, null);
@@ -1957,7 +2067,7 @@ public class WingtipVortex : MonoBehaviour
 
         // ── ASSEMBLY: everything physically continuous with those winners ──
         HashSet<Part> mainAssembly = BuildAssembly(pool, mainLeft, mainRight);
-        Debug.Log($"[VORTEX] main assembly = {mainAssembly.Count} part(s)");
+        Log($"main assembly = {mainAssembly.Count} part(s)");
 
         // Longitudinal span of the main wing. Second line of defence: a panel the flood fill
         // missed (a build where nothing is chained AND nothing quite touches) still has to sit
@@ -2027,7 +2137,7 @@ public class WingtipVortex : MonoBehaviour
         else if (aftSec.Count > 0)
         {
             float pct = (aftSec[0].extremity / Mathf.Max(mainExt, 0.01f)) * 100f;
-            Debug.Log($"[VORTEX] aft surface ignored — span is {pct:F0}% of the wing, a stabiliser not a wing");
+            Log($"aft surface ignored — span is {pct:F0}% of the wing, a stabiliser not a wing");
         }
 
         AeroCandidate secLeft = null, secRight = null;
@@ -2037,11 +2147,11 @@ public class WingtipVortex : MonoBehaviour
             secLeft = BestOnSide(station, true, null);
             secRight = BestOnSide(station, false, null);
             secAssembly = BuildAssembly(station, secLeft, secRight);
-            Debug.Log($"[VORTEX] secondary station = {stationName}, {secAssembly.Count} part(s)");
+            Log($"secondary station = {stationName}, {secAssembly.Count} part(s)");
         }
         else
         {
-            Debug.Log("[VORTEX] no secondary surface qualified");
+            Log("no secondary surface qualified");
         }
 
         // ── SPAWN: at most one per slot, four slots ─────────────────────
@@ -2062,7 +2172,7 @@ public class WingtipVortex : MonoBehaviour
         float ratioL = (mainExt > 0f && secLeft != null) ? Mathf.Clamp01(secLeft.extremity / mainExt) : 1f;
         float ratioR = (mainExt > 0f && secRight != null) ? Mathf.Clamp01(secRight.extremity / mainExt) : 1f;
         if (secLeft != null || secRight != null)
-            Debug.Log($"[VORTEX] secondary span ratio L={ratioL:F2} R={ratioR:F2} (of main wing)");
+            Log($"secondary span ratio L={ratioL:F2} R={ratioR:F2} (of main wing)");
 
         // Strength from span reach rather than from which slot it landed in — see MainLikeness.
         float strL = SecondaryStrength(ratioL);
@@ -2079,12 +2189,12 @@ public class WingtipVortex : MonoBehaviour
         if (secLeft != null || secRight != null)
         {
             if (treatSecondariesAsMain)
-                Debug.Log("[VORTEX] treatSecondariesAsMain: secondaries forced to strength 1.00, "
+                Log("treatSecondariesAsMain: secondaries forced to strength 1.00, "
                           + "span ratio 1.00 — no secondary gate at all");
             else
-                Debug.Log($"[VORTEX] secondary onset L={SecondaryOnsetMult(ratioL):F2}x R={SecondaryOnsetMult(ratioR):F2}x "
+                Log($"secondary onset L={SecondaryOnsetMult(ratioL):F2}x R={SecondaryOnsetMult(ratioR):F2}x "
                           + $"of the main wing ({onsetLoadRef * SecondaryOnsetMult(ratioL):F1} g at the reference condition)");
-            Debug.Log($"[VORTEX] secondary strength L={strL:F2} R={strR:F2} "
+            Log($"secondary strength L={strL:F2} R={strR:F2} "
                       + $"(tip-likeness L={MainLikeness(ratioL):F2} R={MainLikeness(ratioR):F2})");
         }
 
@@ -2096,7 +2206,7 @@ public class WingtipVortex : MonoBehaviour
         if (!okSR && okSL && secLeft != null)
             AddWingVortex(secLeft.part, true, strL, true, secAssembly, ratioL);
 
-        Debug.Log($"[VORTEX] {trails.Count} vortex source(s) created (hard cap 4)");
+        Log($"{trails.Count} vortex source(s) created (hard cap 4)");
     }
 
     // How much of a wingtip this surface is, from how much of the widest span it reaches.
@@ -2168,7 +2278,7 @@ public class WingtipVortex : MonoBehaviour
 
         if (fins.Count == 0)
         {
-            Debug.Log("[VORTEX] rocket: no fins found — no vortices");
+            Log("rocket: no fins found — no vortices");
             return;
         }
 
@@ -2213,12 +2323,12 @@ public class WingtipVortex : MonoBehaviour
             if (AddSourceAtAnchor(a.transform, 1f, 1f, !rocketUseRibbons))
             {
                 made++;
-                Debug.Log($"[VORTEX] ROCKET FIN part={fins[i].name} radial={finR[i]:F2} z={finZ[i]:F2}");
+                Log($"ROCKET FIN part={fins[i].name} radial={finR[i]:F2} z={finZ[i]:F2}");
             }
             else Destroy(a);
         }
 
-        Debug.Log($"[VORTEX] rocket: {made} fin vortex source(s) from {keep.Count} in the aft band "
+        Log($"rocket: {made} fin vortex source(s) from {keep.Count} in the aft band "
                   + $"(band={band:F2}m, {fins.Count} lifting surface(s) total)");
     }
 
@@ -2260,7 +2370,7 @@ public class WingtipVortex : MonoBehaviour
             if (radialGate) { if (radial < minRadialOffset) continue; }
             else { if (Mathf.Abs(cProj) < minLateralOffset) continue; }   // centre sections, fins
 
-            float ext = Mathf.Abs(cProj) + ExtentAlong(b, axLateral);
+            float ext = LateralReach(p, b);
             float zc = Vector3.Dot(b.center - vesselTransform.position, axLength);
             float halfZ = ExtentAlong(b, axLength);
             float th = Mathf.Atan2(vProj, cProj) * Mathf.Rad2Deg;
@@ -2313,7 +2423,7 @@ public class WingtipVortex : MonoBehaviour
 
     void LogSectors(List<AeroCandidate> radialPool, List<List<AeroCandidate>> sectors)
     {
-        Debug.Log($"[VORTEX] SECTORS: {sectors.Count} from {radialPool.Count} radial candidate(s), "
+        Log($"SECTORS: {sectors.Count} from {radialPool.Count} radial candidate(s), "
                   + $"gap>{sectorGapDeg:F0}deg  [{(useSectorSelection ? "LIVE" : "shadow, not used")}]");
         for (int s = 0; s < sectors.Count; s++)
         {
@@ -2326,7 +2436,7 @@ public class WingtipVortex : MonoBehaviour
                 tSum += sec[i].theta;
                 parts += (i > 0 ? ", " : "") + sec[i].part.name;
             }
-            Debug.Log($"[VORTEX]   sector {s}: theta~{tSum / sec.Count:F0}deg maxRadial={maxR:F2} "
+            Log($"  sector {s}: theta~{tSum / sec.Count:F0}deg maxRadial={maxR:F2} "
                       + $"n={sec.Count} [{parts}]");
         }
     }
@@ -2339,7 +2449,7 @@ public class WingtipVortex : MonoBehaviour
         float maxR = 0f;
         for (int i = 0; i < pool.Count; i++)
             if (pool[i].radialDist > maxR) maxR = pool[i].radialDist;
-        if (maxR <= 0f) { Debug.Log("[VORTEX] sector pass: nothing reaches out — no vortices"); return; }
+        if (maxR <= 0f) { Log("sector pass: nothing reaches out — no vortices"); return; }
 
         // A tube models a counter-rotating PAIR converging under mutual induction. Two wingtips
         // are that; three or four fins in a ring are not, which is why canards went back to
@@ -2386,7 +2496,7 @@ public class WingtipVortex : MonoBehaviour
             if (second != null && SpawnSectorSource(second, maxR, forceTrail, $"SECTOR {s} SECOND")) made++;
         }
 
-        Debug.Log($"[VORTEX] sector pass: {made} source(s) from {sectors.Count} sector(s) "
+        Log($"sector pass: {made} source(s) from {sectors.Count} sector(s) "
                   + $"(cap {sectorSourceCap}, tubes={(forceTrail ? "no" : "yes")})");
     }
 
@@ -2402,7 +2512,7 @@ public class WingtipVortex : MonoBehaviour
         Vector3 tip;
         if (!TryFindTipVertex(c.part, c.theta, out tip))
         {
-            Debug.Log($"[VORTEX] {label} part={c.part.name} — no tip vertex found, skipped");
+            Log($"{label} part={c.part.name} — no tip vertex found, skipped");
             return false;
         }
 
@@ -2418,7 +2528,7 @@ public class WingtipVortex : MonoBehaviour
         float strength = SecondaryStrength(ratio);
 
         if (!AddSourceAtAnchor(a.transform, strength, ratio, forceTrail)) { Destroy(a); return false; }
-        Debug.Log($"[VORTEX] {label} part={c.part.name} radial={c.radialDist:F2} theta={c.theta:F0}deg "
+        Log($"{label} part={c.part.name} radial={c.radialDist:F2} theta={c.theta:F0}deg "
                   + $"ratio={ratio:F2} strength={strength:F2}");
         return true;
     }
@@ -2490,7 +2600,7 @@ public class WingtipVortex : MonoBehaviour
 
         if (AddWingVortex(chosen.part, isRight, strength, false, group, spanRatio))
         {
-            Debug.Log($"[VORTEX] {label} part={chosen.part.name} ext={chosen.extremity:F2}");
+            Log($"{label} part={chosen.part.name} ext={chosen.extremity:F2}");
             return true;
         }
 
@@ -2503,12 +2613,12 @@ public class WingtipVortex : MonoBehaviour
             if (group != null && !group.Contains(c.part)) continue;
             if (AddWingVortex(c.part, isRight, strength, false, group, spanRatio))
             {
-                Debug.Log($"[VORTEX] {label} (fallback) part={c.part.name} ext={c.extremity:F2}");
+                Log($"{label} (fallback) part={c.part.name} ext={c.extremity:F2}");
                 return true;
             }
         }
 
-        Debug.Log($"[VORTEX] {label} — no usable geometry");
+        Log($"{label} — no usable geometry");
         return false;
     }
 
@@ -2887,6 +2997,11 @@ public class WingtipVortex : MonoBehaviour
             float endFade = 1f - Mathf.Clamp01((endPos - (1f - ribbonEndFade)) / Mathf.Max(ribbonEndFade, 0.01f));
             endFade = endFade * endFade * (3f - 2f * endFade);
 
+            // See ribbonHeadRampFraction. Width comes up linearly, alpha as 1-(1-u)^2.
+            float headU = Mathf.Clamp01(endPos / Mathf.Max(ribbonHeadRampFraction, 0.01f));
+            float headWidth = Mathf.Lerp(ribbonHeadWidthFloor, 1f, headU);
+            float headAlpha = 1f - (1f - headU) * (1f - headU);
+
             // tailRatio and CoreGrowth are separate on purpose and both belong here. The core
             // itself only ever gets WIDER (diffusion is one-way), which is CoreGrowth; how much
             // of that core is still condensed is what tailRatio carries, and in dry air that
@@ -2925,15 +3040,15 @@ public class WingtipVortex : MonoBehaviour
                            * Mathf.Lerp(headWidthFraction, 1f, grow)
                            * Mathf.Lerp(1f, tailRatio, ageFrac)
                            * diffG * bdFlare
-                           * endFade;
+                           * endFade * headWidth;
 
-            // Full brightness across the peak window, then a taper spanning everything after it.
-            // See ribbonPeakFraction.
+            // Ramp in over the head, full brightness until ribbonPeakFraction, then a taper
+            // spanning everything after it.
             float fadeT = Mathf.Clamp01((ageFrac - ribbonPeakFraction)
                                         / Mathf.Max(1f - ribbonPeakFraction, 0.01f));
             float alpha = live
                 ? Mathf.Clamp01(r.shed[src] * trailAlphaGain * (1f - Mathf.Pow(fadeT, ribbonFadePow))
-                                * endFade * CoreDim(diffG) * bdFade)
+                                * endFade * headAlpha * CoreDim(diffG) * bdFade)
                 : 0f;
             if (!live) radius = 0f;
 
@@ -2963,7 +3078,10 @@ public class WingtipVortex : MonoBehaviour
                 if (sN.sqrMagnitude < 1e-4f) sN = Vector3.ProjectOnPlane(Vector3.right, tangent);
                 sN.Normalize();
                 Vector3 sB = Vector3.Cross(tangent, sN);
-                float sAmp = spiralAmpCores * frameR0Vis * bdSize * (1f - bdBubble) * bdOnset;
+                // Decay time is spiralDecayTurns wavelengths of air passing at flight speed.
+                float sDecayT = spiralDecayTurns * spiralLambda / Mathf.Max(frameSpeed, 1f);
+                float sAmp = spiralAmpCores * frameR0Vis * bdSize * (1f - bdBubble) * bdOnset
+                             * Mathf.Exp(-bdP / Mathf.Max(sDecayT, 0.01f));
                 float sPhase = (r.odo[src] / spiralLambda) * Mathf.PI * 2f + spiralPrecession * age + r.seed;
                 centre += (sN * Mathf.Cos(sPhase) + sB * Mathf.Sin(sPhase)) * sAmp;
             }
@@ -3019,7 +3137,7 @@ public class WingtipVortex : MonoBehaviour
             var mr2 = r.obj.GetComponent<MeshRenderer>();
             string shader = (mr2 != null && mr2.sharedMaterial != null) ? mr2.sharedMaterial.shader.name : "NULL";
             Vector3 bsize = hi - lo;
-            Debug.Log($"[VORTEX] tube rings={r.count}/{rings} verts={r.mesh.vertexCount} " +
+            Log($"tube rings={r.count}/{rings} verts={r.mesh.vertexCount} " +
                       $"boundsSize=({bsize.x:F1},{bsize.y:F1},{bsize.z:F1}) " +
                       $"arc={arc:F1}m twistTail={(ribbonTwistPerMetre * arc):F2}rad " +
                       $"alpha={aMin:F2}..{aMax:F2} rendOn={(mr2 != null && mr2.enabled)} " +
@@ -3061,16 +3179,11 @@ public class WingtipVortex : MonoBehaviour
                 {
                     Bounds rrB;
                     if (!TryGetPartBounds(part, out rrB)) continue;
-                    float cProj = Vector3.Dot(rrB.center - vesselTransform.position, vesselTransform.right);
-                    float eProj = ExtentAlong(rrB, vesselTransform.right);
-                    float ext = Mathf.Abs(cProj) + eProj;
-                    maxExt = Mathf.Max(maxExt, ext);
+                    maxExt = Mathf.Max(maxExt, LateralReach(part, rrB));
                 }
 
-                float thisC = Vector3.Dot(rCheckB.center - vesselTransform.position, vesselTransform.right);
-                float thisE = ExtentAlong(rCheckB, vesselTransform.right);
-                float thisExt = Mathf.Abs(thisC) + thisE;
-                Debug.Log($"[VORTEX] CLIMB GATE part={wing.name} ext={thisExt:F2} vs widest={maxExt:F2} "
+                float thisExt = LateralReach(wing, rCheckB);
+                Log($"CLIMB GATE part={wing.name} ext={thisExt:F2} vs widest={maxExt:F2} "
                           + $"— {(thisExt >= maxExt * 0.95f ? "already the tip, NO climb" : "climbing")}");
 
                 if (thisExt >= maxExt * 0.95f)
@@ -3093,7 +3206,7 @@ public class WingtipVortex : MonoBehaviour
             safety++;
 
             Vector3 baseLocal = ToVesselFrame(anchorWorld);
-            Debug.Log($"[VORTEX] CLIMB CHECK iter={safety} baseY={baseLocal.y:F2} part={currentPart.name}");
+            Log($"CLIMB CHECK iter={safety} baseY={baseLocal.y:F2} part={currentPart.name}");
 
             Part bestAbovePart = null;
             float bestHorizDist = float.MaxValue;
@@ -3183,7 +3296,7 @@ public class WingtipVortex : MonoBehaviour
                     bestAbovePart = p;
                 }
 
-                Debug.Log($"[VORTEX] CLIMB CAND part={p.name} horiz={horizDist:F2} topY={maxLocal.y:F2} centerY={centerLocal.y:F2}");
+                Log($"CLIMB CAND part={p.name} horiz={horizDist:F2} topY={maxLocal.y:F2} centerY={centerLocal.y:F2}");
             }
 
             if (bestAbovePart != null)
@@ -3193,7 +3306,7 @@ public class WingtipVortex : MonoBehaviour
                 Vector3 maxLocal = ToVesselFrame(b.center) +
                                    new Vector3(ExtentAlong(b, axLateral), ExtentAlong(b, axVert), ExtentAlong(b, axLength));
 
-                Debug.Log($"[VORTEX] CLIMB HIT part={bestAbovePart.name} horiz={bestHorizDist:F2} topY={maxLocal.y:F2}");
+                Log($"CLIMB HIT part={bestAbovePart.name} horiz={bestHorizDist:F2} topY={maxLocal.y:F2}");
 
                 currentPart = bestAbovePart;
                 // FIX: don't snap to absolute top (causes hovering above surface)
@@ -3205,7 +3318,7 @@ public class WingtipVortex : MonoBehaviour
             }
             else
             {
-                Debug.Log($"[VORTEX] CLIMB STOP at part={currentPart.name}");
+                Log($"CLIMB STOP at part={currentPart.name}");
             }
         }
 
@@ -3239,56 +3352,9 @@ public class WingtipVortex : MonoBehaviour
 
     void Update()
     {
-        // ACTIVE VESSEL CHANGE. `vessel` was captured once in Start() and never re-read, so
-        // switching craft in flight left the whole mod pointed at the craft you just left. It
-        // kept drawing for that one and the new craft got nothing, and the 1.0.2 staleness check
-        // could not catch it either: that compares each anchor's part against `vessel`, and since
-        // BOTH were still the old craft they agreed perfectly. Only recovering and re-launching
-        // fixed it, because that is what finally ran Start() again.
-        //
-        // Polled rather than hooked to GameEvents, for the same reason the staleness check is:
-        // one reference comparison per frame catches every cause — bracket-key switching, map-view
-        // switching, a docking port taking control, a vessel splitting — without depending on
-        // which event KSP fires for each.
-        Vessel active = FlightGlobals.ActiveVessel;
-        if (active != vessel)
-        {
-            // Drop the old craft's wake immediately. Its anchors belong to parts we are no longer
-            // flying, and leaving them live is the 1.0.2 staging bug in a different costume.
-            if (trails.Count > 0) ClearSources();
-
-            // Same readiness gate as Start(): a freshly focused vessel is loaded while still
-            // packed, and measuring it then resolves the wrong axes. Returning here just means
-            // trying again next frame.
-            if (active == null || !active.loaded || active.packed
-                || active.rootPart == null || active.parts == null || active.parts.Count == 0)
-                return;
-
-            vessel = active;
-            vesselTransform = vessel.transform;
-
-            // Everything decided per-craft has to be decided again. verticalLauncher especially:
-            // it is latched from launch attitude, and inheriting a spaceplane's answer is exactly
-            // how a rocket ends up run through the aircraft selection rule.
-            verticalLauncher = -1;
-            boundsLogged = false;
-            rogueRendererLogged = false;
-            loggedSecondaryGate = false;
-            loggedSunFlux = false;
-            airborneBlend = vessel.LandedOrSplashed ? 0f : 1f;
-            smoothedLiftG = 1f;
-            currentIntensity = 0f;
-            lastRbSpeed = 0f;
-            boundsRefreshTimer = 0f;
-            staleCheckTimer = 0f;
-
-            ComputeVesselBounds();
-            FindVortexSources();
-            Debug.Log($"[VORTEX] active vessel changed — {vessel.vesselName}: "
-                      + $"{trails.Count} source(s), landed={vessel.LandedOrSplashed}");
-            return;   // lists were just rebuilt; pick it up next frame
-        }
-
+        // Bound to one craft for life (see `target`); WingtipVortexManager handles which craft
+        // have a controller, including the one you switch to. `vessel` stays null until Start()
+        // has waited out the craft's unpack and settle.
         if (vessel == null || !vessel.loaded) return;
 
         float rawDelta = Time.deltaTime;
@@ -3344,7 +3410,7 @@ public class WingtipVortex : MonoBehaviour
             staleCheckTimer = 0f;
             if (trails.Count > 0 && SourcesStale())
             {
-                Debug.Log("[VORTEX] sources no longer belong to this vessel — re-detecting");
+                Log("sources no longer belong to this vessel — re-detecting");
                 ClearSources();
                 ComputeVesselBounds();
                 FindVortexSources();
@@ -3477,29 +3543,15 @@ public class WingtipVortex : MonoBehaviour
         // aircraft rather than the gear. Cruise fails the second, a high-altitude pass fails the
         // first, and the takeoff roll fails the third — which is the one it used to pass,
         // because the CL proxy is scale-free in speed and says nothing about who holds the weight.
-        // Fraction of full sunlight reaching the wake, 0-1, on any body. See nightFloorScale.
-        float sunLit = 1f;
+        // How lit the wake is, 0 (night) to 1 (day), on any body. See nightFloorScale and
+        // VortexVapor.Sunlight, which the wing vapor shares.
+        float sunElevation;
+        float sunLit = VortexVapor.Sunlight.Fraction(vessel, out sunElevation);
+        if (!loggedSunFlux)
         {
-            CelestialBody star = (Planetarium.fetch != null) ? Planetarium.fetch.Sun : null;
-            double fullFlux = 0.0;
-            if (star != null)
-            {
-                double dSun = (vessel.CoM - star.position).magnitude;
-                if (dSun > 1.0)
-                    fullFlux = PhysicsGlobals.SolarLuminosity / (4.0 * System.Math.PI * dSun * dSun);
-            }
-            // Falling back to the raw flux rather than to a constant: if the star cannot be
-            // resolved, treating the sky as fully lit is the safer failure than going dark.
-            sunLit = (fullFlux > 1.0)
-                ? Mathf.Clamp01((float)(vessel.solarFlux / fullFlux))
-                : 1f;
-
-            if (!loggedSunFlux)
-            {
-                loggedSunFlux = true;
-                Debug.Log($"[VORTEX] illumination: flux={vessel.solarFlux:F0} full={fullFlux:F0} "
-                          + $"sunLit={sunLit:F2} scale={Mathf.Lerp(nightFloorScale, dayLightScale, sunLit):F2}");
-            }
+            loggedSunFlux = true;
+            Log($"illumination: sun {sunElevation:F1} deg above the horizon (flux={vessel.solarFlux:F0}) "
+                      + $"sunLit={sunLit:F2} scale={Mathf.Lerp(nightFloorScale, dayLightScale, sunLit):F2}");
         }
 
         float rhoASL = (vessel.mainBody != null) ? (float)vessel.mainBody.atmDensityASL : 1.225f;
@@ -3557,7 +3609,7 @@ public class WingtipVortex : MonoBehaviour
                 // altitude, which understated a 3.5 s wake as 2.5 s.
                 float wakeLife = Mathf.Lerp(maneuverTimeMax, contrailTimeMax, contrailBlend);
                 float gMid = CoreGrowth(wakeLife * 0.5f), gEnd = CoreGrowth(wakeLife);
-                Debug.Log($"[VORTEX] core growth ({(lowShot ? "low" : "band")}): T={tK:F0}K "
+                Log($"core growth ({(lowShot ? "low" : "band")}): T={tK:F0}K "
                           + $"rho={rho:F3} cb={contrailBlend:F2} nu={nuRaw:E2} Gamma={gamma:F0}m2/s "
                           + $"nuEff={nuEff:E2} r0={r0:F2}m rate={coreGrowthRate:F3}/s life={wakeLife:F1}s | "
                           + $"mid: w x{gMid:F2} a x{CoreDim(gMid):F2} | "
@@ -3598,7 +3650,7 @@ public class WingtipVortex : MonoBehaviour
                 float vOut = gamma / (4f * Mathf.PI) * b0sq / (hEff * (4f * hEff * hEff + b0sq));
                 float w0 = gamma / (2f * Mathf.PI * frameB0);
                 float life = Mathf.Lerp(maneuverTimeMax, contrailTimeMax, contrailBlend);
-                Debug.Log($"[VORTEX] ground effect: AGL={hV:F1}m (raycast={vessel.heightFromTerrain:F1} "
+                Log($"ground effect: AGL={hV:F1}m (raycast={vessel.heightFromTerrain:F1} "
                           + $"radar={vessel.radarAltitude:F1}) b0={frameB0:F1}m h/b0={hV / frameB0:F2} "
                           + $"factor={frameGroundFac:F2} Gamma={gamma:F0}m2/s | drift={vOut:F2}m/s "
                           + $"(free descent {w0:F2}m/s) -> {Mathf.Min(vOut * life * groundSpreadScale, groundSpreadMaxSpans * vesselSpan):F1}m "
@@ -3637,7 +3689,7 @@ public class WingtipVortex : MonoBehaviour
             if (!loggedBreakdown && frameBreakDepth > 0.05f && intensity > 0.2f)
             {
                 loggedBreakdown = true;
-                Debug.Log($"[VORTEX] breakdown engaged: swirl={swirl:F2} (onset {breakdownSwirlOnset:F2}) "
+                Log($"breakdown engaged: swirl={swirl:F2} (onset {breakdownSwirlOnset:F2}) "
                           + $"V={speed:F0}m/s Gamma={gamma:F0}m2/s clProxy={clProxy:F2} "
                           + $"depth={frameBreakDepth:F2} mode={(frameBreakMode <= 0f ? "spiral" : frameBreakMode >= 1f ? "bubble" : "mixed " + frameBreakMode.ToString("F2"))} "
                           + $"burst at {station:F0}m ({frameBreakT:F2}s) behind the tip");
@@ -3797,7 +3849,7 @@ public class WingtipVortex : MonoBehaviour
                                 maxDev = Mathf.Max(maxDev,
                                     Vector3.ProjectOnPlane(strail.GetPosition(i0 + step * q) - pa, nrm).magnitude);
                         }
-                        Debug.Log($"[VORTEX] helix check g={g:F2} drive={helixDrive:F3} " +
+                        Log($"helix check g={g:F2} drive={helixDrive:F3} " +
                                   $"commandedAmp={helixRadiusMax * helixDrive:F2}m " +
                                   $"chord={axisLen:F0}m measuredBow={maxDev:F2}m points={sn}");
                     }
@@ -3825,11 +3877,8 @@ public class WingtipVortex : MonoBehaviour
             if (approachFloor > 0f)
                 visible = Mathf.Max(visible, approachFloor * strengths[i]);
 
-            // See nightFloorScale. dayLightScale is deliberately 0.75 rather than 1.0: with the
-            // normalisation fixed, full daylight would otherwise jump from the 0.68 the old
-            // hard-coded divisor happened to produce on Kerbin straight to 1.0, brightening every
-            // daytime wake by about a third as a side effect of fixing the night. 0.75 keeps the
-            // daylight look as tuned and makes the constant explicit instead of accidental.
+            // See nightFloorScale. dayLightScale is below 1.0 on purpose: it is the daytime look as
+            // tuned, made explicit rather than left to whatever the light measure happens to read.
             float nightScale = Mathf.Lerp(nightFloorScale, dayLightScale, sunLit);
             visible *= nightScale;
 
@@ -3904,7 +3953,7 @@ public class WingtipVortex : MonoBehaviour
                 if (!loggedSecondaryGate && visible > 0.002f)
                 {
                     loggedSecondaryGate = true;
-                    Debug.Log($"[VORTEX] secondary live: span={spanRatios[i]:F2} mainLike={mainLike:F2} "
+                    Log($"secondary live: span={spanRatios[i]:F2} mainLike={mainLike:F2} "
                               + $"sizeMult={sizeMult:F2}x g={g:F2} gMin={gMin:F2} "
                               + $"gGate={gGate:F2} vGate={vGate:F2} gate={gate:F2} "
                               + $"strength={strengths[i]:F3} visible={visible:F3}");
@@ -3932,7 +3981,7 @@ public class WingtipVortex : MonoBehaviour
             Vector3 anchorStep = anchorPos - lastAnchorPositions[i];
             if (anchorStep.sqrMagnitude > plausibleStep * plausibleStep)
             {
-                Debug.Log($"[VORTEX] anchor teleport {anchorStep.magnitude:F1}m > plausible {plausibleStep:F1}m, clearing trail {i}");
+                Log($"anchor teleport {anchorStep.magnitude:F1}m > plausible {plausibleStep:F1}m, clearing trail {i}");
                 tr.Clear();
                 history.Clear();
                 trailAges[i] = 0f; trailHeadAges[i] = 0f;
@@ -4012,7 +4061,7 @@ public class WingtipVortex : MonoBehaviour
                 {
                     loggedTrailMat = true;
                     var tm = tr.sharedMaterial;
-                    Debug.Log($"[VORTEX] trail renderer live: material={(tm == null ? "NULL (this is the magenta)" : tm.name)} "
+                    Log($"trail renderer live: material={(tm == null ? "NULL (this is the magenta)" : tm.name)} "
                               + $"shader={(tm == null || tm.shader == null ? "NULL" : tm.shader.name)}");
                 }
 
@@ -4372,7 +4421,7 @@ public class WingtipVortex : MonoBehaviour
         {
             loggedWidthProfile = true;
             var wc = tr.widthCurve;
-            Debug.Log($"[VORTEX] width profile keys={wc.length} mult={tr.widthMultiplier:F3} " +
+            Log($"width profile keys={wc.length} mult={tr.widthMultiplier:F3} " +
                       $"caps={tr.numCapVertices} points={tr.positionCount} " +
                       $"rollup={rollupMetres:F1}m trail={trailMetres:F0}m rampFrac={rampFrac:F5} | " +
                       $"u0={wc.Evaluate(0f):F3} uRamp={wc.Evaluate(rampFrac):F3} " +
@@ -4415,5 +4464,108 @@ public class WingtipVortex : MonoBehaviour
             z = zc; zLo = zc - halfZ; zHi = zc + halfZ;
             radialDist = rDist; theta = th;
         }
+    }
+}
+
+// Gives each craft worth drawing its own WingtipVortex controller. The craft you fly always has
+// one; other loaded, unpacked craft with lifting surfaces (AI wingmen, a BDArmory opponent) get
+// one too, nearest first, up to MaxControllers. Wing vapor is not part of this: it stays on the
+// active craft only (WingVaporAddon), because it runs a per-part aerodynamic solve every physics
+// step, where the vortices only read each part's stock lift.
+[KSPAddon(KSPAddon.Startup.Flight, false)]
+public class WingtipVortexManager : MonoBehaviour
+{
+    // Including the active craft. Each controller rebuilds its tube meshes every frame, so this
+    // bounds the cost in a big BDArmory match rather than the effect in a small one.
+    const int MaxControllers = 10;
+    const float ScanInterval = 0.5f;   // s; craft come and go on a timescale of seconds
+
+    readonly Dictionary<Vessel, WingtipVortex> controllers = new Dictionary<Vessel, WingtipVortex>();
+    readonly List<Vessel> wanted = new List<Vessel>();
+    readonly List<Vessel> drop = new List<Vessel>();
+    float nextScan = 0f;
+
+    void Update()
+    {
+        if (Time.unscaledTime < nextScan) return;
+        nextScan = Time.unscaledTime + ScanInterval;
+        if (!FlightGlobals.ready) return;
+
+        Vessel active = FlightGlobals.ActiveVessel;
+        wanted.Clear();
+        // Not a fired missile, though: BDArmory makes one the active vessel to follow it.
+        if (active != null && active.loaded && !VortexVapor.BDArmoryCraft.IsMissile(active)) wanted.Add(active);
+
+        List<Vessel> loaded = FlightGlobals.VesselsLoaded;
+        if (loaded != null)
+        {
+            int start = wanted.Count;
+            for (int i = 0; i < loaded.Count; i++)
+            {
+                Vessel v = loaded[i];
+                if (v != null && v != active && IsAircraft(v)) wanted.Add(v);
+            }
+            // Nearest first, measured from the craft you are flying (or the camera's craft).
+            if (active != null && wanted.Count - start > 1)
+            {
+                Vector3 from = active.transform.position;
+                wanted.Sort(start, wanted.Count - start, Comparer<Vessel>.Create((a, b) =>
+                    (a.transform.position - from).sqrMagnitude.CompareTo((b.transform.position - from).sqrMagnitude)));
+            }
+            if (wanted.Count > MaxControllers) wanted.RemoveRange(MaxControllers, wanted.Count - MaxControllers);
+        }
+
+        drop.Clear();
+        foreach (var kv in controllers)
+            if (kv.Key == null || kv.Value == null || !wanted.Contains(kv.Key)) drop.Add(kv.Key);
+        foreach (Vessel v in drop)
+        {
+            WingtipVortex c;
+            if (controllers.TryGetValue(v, out c) && c != null) Destroy(c.gameObject);
+            controllers.Remove(v);
+        }
+
+        foreach (Vessel v in wanted)
+        {
+            if (controllers.ContainsKey(v)) continue;
+            var go = new GameObject("WingtipVortex " + v.vesselName);
+            var c = go.AddComponent<WingtipVortex>();
+            c.target = v;   // before Start(), which runs next frame
+            controllers[v] = c;
+        }
+    }
+
+    // A craft that can shed a wake and is being simulated. Unpacked only: a packed craft's parts
+    // are not where the tip search needs them (see sourceReadyTimeout), and on rails it is not
+    // flying through air anyway. The active craft skips this test, as it always has.
+    static bool IsAircraft(Vessel v)
+    {
+        if (!v.loaded || v.packed || v.parts == null || v.parts.Count == 0) return false;
+        switch (v.vesselType)
+        {
+            case VesselType.Debris:
+            case VesselType.EVA:
+            case VesselType.Flag:
+            case VesselType.SpaceObject:
+            case VesselType.Unknown:
+            case VesselType.DeployedScienceController:
+            case VesselType.DeployedSciencePart:
+            case VesselType.DroppedPart:
+                return false;
+        }
+        for (int i = 0; i < v.parts.Count; i++)
+        {
+            Part p = v.parts[i];
+            if (p != null && p.Modules != null && (p.Modules.Contains("ModuleLiftingSurface") || p.Modules.Contains("ModuleControlSurface")))
+                return !VortexVapor.BDArmoryCraft.IsMissile(v);   // a modular missile built on stock fins
+        }
+        return false;
+    }
+
+    void OnDestroy()
+    {
+        foreach (var kv in controllers)
+            if (kv.Value != null) Destroy(kv.Value.gameObject);
+        controllers.Clear();
     }
 }

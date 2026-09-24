@@ -12,6 +12,9 @@ namespace VortexVapor
         public Planform planform;
         public PlaneFrame frame;
         public Vector3 lift;        // N, world: stock's force on this part
+        // N, world: the share of `lift` the vapor may condense from. Equal to `lift` except on a
+        // roll control surface, where it is the mean over its symmetry group (AeroState.Surfaces).
+        public Vector3 vaporLift;
     }
 
     // Answers "which parts' volumes contain this point", as flight IDs, excluding one part.

@@ -32,7 +32,13 @@ Visibility is condensation, not circulation, so two saturation floors sit on top
 5. Places anchors: {left, right} × {main, secondary} on aircraft, or one per fin on a rocket
 6. Applies visual behaviour based on flight conditions
 
-Detection re-runs by itself when it needs to (on staging, part loss, docking, or switching craft), so a wake never keeps drawing from parts you are no longer flying.
+Detection re-runs by itself when it needs to (on staging, part loss or docking), so a wake never keeps drawing from parts that have left the craft.
+
+### Every aircraft (1.3.0)
+
+Each craft gets its own vortex controller, bound to it for its whole life: the one you fly, plus other loaded aircraft with lifting surfaces, nearest first, up to ten in all. Debris, EVA kerbals, flags and BDArmory missiles are skipped. Because each wake belongs to its own craft, switching vessels touches no wake at all: the craft you leave keeps its trails, and the one you take over already has its own.
+
+The airframe is measured in the craft's own frame, so span and the wingtip search give the same answer whether the craft is sitting level on the runway or was spawned banked in the air.
 
 ### Details worth knowing
 
@@ -43,6 +49,7 @@ Detection re-runs by itself when it needs to (on staging, part loss, docking, or
 * Secondary surfaces (canards, small fins) need real load to appear, and their wakes are short: a canard vortex bursts over the wing within a chord or two rather than trailing
 * Capped at four vortices per aircraft, structurally
 * Smooth fade in and out at every threshold, no popping; scales with aircraft size
+* The rope starts as a thin, faint thread at the tip and builds to full width and brightness over its first 40%, the way tip-vortex condensation thickens as the core rolls up
 * Robust against visual mods that use oversized renderer bounds
 
 ---
@@ -55,7 +62,7 @@ Three pieces of real physics act on the vortices themselves.
 |---|---|---|
 | **Viscous core growth** | A heavy aircraft's wake stays a tight rope; a light one goes soft in seconds | Lamb-Oseen diffusion, r(t) = √(r₀² + 4αν t), fed by Squire's eddy viscosity (proportional to the vortex's own circulation) plus a molecular term from Sutherland's law. Widening is paired with dimming, because circulation is conserved |
 | **Ground effect** | Behind a low pass the two ropes splay apart instead of running parallel | A mirror vortex of opposite sign under the ground cancels the pair's descent, pushes each vortex outboard, and raises near-ground diffusion. It changes where the rope goes, never whether it is drawn |
-| **Vortex breakdown** | A core kinks into a corkscrew (spiral) or bursts into a bulge (bubble) | Set by the swirl ratio, peak tangential over axial velocity, with thresholds from Spall, Gatski and Grosch (1987). The burst moves toward the tip as swirl rises |
+| **Vortex breakdown** | A core kinks and throws a turn or two before dispersing (spiral), or bursts into a bulge (bubble) | Set by the swirl ratio, peak tangential over axial velocity, with thresholds from Spall, Gatski and Grosch (1987). The burst moves toward the tip as swirl rises |
 
 There is no laminar/turbulent switch, on purpose: across every flight case that draws anything, the vortex Reynolds number is 10⁶ to 10⁸, so the wake is always turbulent.
 
@@ -69,6 +76,7 @@ Each effect logs a one-shot line the first time it engages, and `[VORTEX] sessio
 
 * Vortices use no particle systems: tube meshes on main vortices, trails on secondary surfaces
 * Vessel measurement and mass lookups are throttled, not per-frame
+* One controller per aircraft, capped at ten, nearest first: each rebuilds its own tube meshes every frame, so a large BDArmory match costs more than a duel
 * Cross-section geometry uses a precomputed unit-circle table
 * The wing vapor's cost is on [its own page](wing-vapor.md#performance)
 

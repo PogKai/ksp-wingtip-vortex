@@ -22,7 +22,7 @@ Fly. That's it: no menus, no settings, no per-craft setup.
 
 | | |
 |---|---|
-| **Wingtip vortices** | Twin vortex trails curl in behind your wingtips, stronger the harder the wing is working. Works on multi-part wings, canards and rockets |
+| **Wingtip vortices** | Twin vortex trails curl in behind the wingtips, stronger the harder the wing is working. On your craft and every aircraft around you, AI wingmen and BDArmory opponents included. Works on multi-part wings, canards and rockets |
 | **Wing vapor** | The white sheet over the wings in a hard pull. It is *hard to get*, on purpose |
 | **Wake behaviour** | Trails spread as they age, the ground pushes them apart, and a heavily loaded core can burst |
 
@@ -38,10 +38,11 @@ KSP 1.12.x · no dependencies · to upgrade, replace the folder · to remove, de
 
 <br>
 
-## New in 1.2.0
+## New in 1.3.0
 
-* **Wing vapor**, worked out from the physics of the air over each wing instead of from thresholds
-* **Wake physics**: core growth, ground effect and vortex breakdown
+* **Vortices on every aircraft** around you, not just the one you fly. Switching craft no longer resets any wake
+* **Vortices form like real ones**: a thin, faint thread at the wingtip that builds up behind it, and a much gentler spiral breakdown
+* **BDArmory**: wing vapor stays on the jet when the camera follows a missile, and AI craft spawned in the air are measured correctly
 * Everything else in the [changelog](CHANGELOG.md)
 
 <br>

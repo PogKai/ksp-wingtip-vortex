@@ -4,6 +4,97 @@ All notable changes to KSP Wingtip Vortex.
 
 ---
 
+## 1.3.0 — Wingmen
+
+Until now the mod drew one aircraft: the one you were flying. This release draws every aircraft in
+the air around you, so an AI wingman or a BDArmory opponent trails its own vortices. The vortices
+also form more like real ones, starting as a thin, faint thread at the wingtip, and the corkscrew
+breakdown is much less exaggerated.
+
+### Added
+
+* **Vortices on every aircraft, not just yours.** Each craft now gets its own vortex controller,
+  bound to it for its whole life, and a manager hands them out: always the craft you fly, plus
+  other loaded aircraft with lifting surfaces, nearest first, up to ten in all. Debris, EVA kerbals,
+  flags and BDArmory missiles are skipped. Because each wake belongs to its own craft, **switching
+  vessels no longer touches any wake**: the craft you leave keeps its trails, and the one you take
+  over already has its own. Previously a switch tore down the old craft's wake and rebuilt one on
+  the new craft from scratch. Wing vapor is not handed out the same way: it runs a per-part
+  aerodynamic solve every physics step, where the vortices only read each part's lift, so it stays
+  on the craft you fly and moves with you when you switch.
+
+* **BDArmory awareness, with no dependency.** BDArmory makes a fired missile the active vessel to
+  follow it. The wing vapor no longer follows it there: it stays on the aircraft that fired it,
+  which keeps drawing its own vapor while you watch the shot. A fired missile is recognised as a
+  craft carrying one of BDArmory's missile modules and no weapon manager, by class name, so the mod
+  still loads without BDArmory.
+
+### Changed
+
+* **Vortices start thin and faint at the wingtip.** The rope used to leave the anchor already at
+  full brightness: a thin thread, but a white one, which read as a line stuck onto the wingtip
+  rather than vapour forming behind it. Real tip-vortex condensation starts wispy and thickens as
+  the core rolls up and its pressure drop deepens, and how opaque a condensed tube looks goes with
+  the path length through it, its width, so a thread should also be faint. Width and opacity now
+  both build up over the first 40% of the rope, and the brightest stretch sits mid-rope instead of
+  at the tip. The look follows bimo1d's KerbalFX AeroFX.
+
+* **Spiral breakdown toned down.** A hard pull only ever takes a vortex just past breakdown onset,
+  where the spiral was already at full size but faded very slowly, so it laid a regular corkscrew
+  hundreds of metres long; seen along the rope it read as loops. A real spiral breakdown is a kink
+  that throws a turn or two and then disperses. The spiral is now a third the amplitude and twice
+  the wavelength, and its displacement falls away over a turn or two, whatever the depth.
+
+* **Rolling no longer puts vapor on the tail.** A control surface that responds to roll (a
+  taileron, an elevon, an all-moving stabilator) now makes vapor only from the load it shares with
+  its mirror twin. A pure roll deflects the two halves equal and opposite, so neither fogs; a pull
+  loads both alike, so both fog as before. Stock gives a small, fully deflected surface a lift
+  coefficient no real tail reaches, with no downwash from the wing ahead, so the half deflected with
+  the aircraft's lift used to fog at every roll input while the wing stayed clear. A style rule,
+  like the one for surfaces lifting against the aircraft: a real stabilator can fog briefly in a
+  hard, loaded roll. The vortices still shed from the full lift.
+
+* **Log lines name their craft**, now that several craft log at once:
+  `[VORTEX] [Su-33 Flanker-D] measured: span=12.0m ...`. Stock craft show their display name rather
+  than a `#autoLOC_` key. The wing vapor logs each move between craft
+  (`[VORTEX] wing vapor: now on <craft> (off <craft>)`), and each missile it declines to follow.
+
+### Fixed
+
+* **Vortices and wing vapor dimmed every afternoon, not just at night.** Both dim on the night side,
+  and they read how lit the air is from stock's solar flux, which includes the atmosphere's
+  absorption along the sun's path. With the sun low it fell steeply: a late afternoon at KSC read
+  as 20-45% lit under a still-bright sky, which drew the vortices at a half to a third of their
+  midday strength, just where a bright sky washes out a trail, and tinted the vapor grey. The light
+  now follows the sun's height above the craft's own horizon: full with the sun up, fading through
+  twilight, and the horizon dips with altitude so a high wake stays lit after the ground goes dark.
+
+* **Span was measured wrong on a craft that was not level.** The airframe was measured from
+  world-aligned bounding boxes, which fit only while the craft is lined up with the world axes, as
+  it roughly is on the runway. Switched to in flight, banked or turned, span came out as much as
+  1.8 times too wide (an Su-33 at 19.7 m against 12.1 m). Span sets the circulation, the core size
+  and the swirl, so the same jet looked different depending on how it was sitting when measured,
+  and BDArmory spawns every AI craft in the air. It is now measured in the craft's own frame, from
+  each mesh's own bounds, so it no longer depends on attitude.
+
+* **Wingtip anchors could land on the wrong part**, from the same cause: the candidates for the
+  wingtip were ranked by that inflated reach. On a BDArmory-spawned F-22 a part that ties with the
+  wingtip when level read a metre further out than the half-span, and both anchors moved onto it.
+  The ranking and the check that confirms a part is the tip now use the same craft-frame
+  measurement.
+
+* **Every wake was drawn twice at flight start.** The per-frame vessel check built the sources
+  before start-up had finished, and start-up then added a second set on top (four sources on a
+  two-tip craft). On the runway a re-check three seconds later removed the extra set; a craft that
+  started in the air kept double-bright trails for the whole flight.
+
+* **Wing vapor could switch itself off in combat.** It takes a snapshot of every part's volume and
+  reads it up to a few physics steps later; a part shot off in between left the snapshot pointing
+  at a destroyed part, and the `NullReferenceException` counted toward the five errors after which
+  the wing vapor turns itself off for the flight.
+
+---
+
 ## 1.2.0 — Wing Vapor
 
 1.1.0 taught the mod rockets. This release adds the other thing a fighter leaves in a hard pull, the

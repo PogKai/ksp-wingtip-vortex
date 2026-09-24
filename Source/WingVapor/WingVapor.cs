@@ -138,13 +138,23 @@ namespace VortexVapor
             }
             if (gammaOf.Length < totalPanels) { gammaOf = new float[2 * totalPanels]; chordOf = new float[2 * totalPanels]; }
             for (int si = 0; si < surfaces.Count; si++)
+            {
+                // The share of this part's loading the vapor sees (Surface.vaporLift): 1 on
+                // everything but a roll control surface, where it is how much of its load along
+                // the net lift its symmetry group carries together. Zero in a pure roll. A part
+                // lifting mostly sideways (a twin fin's rudder) keeps its whole load: its component
+                // along the net lift is small and would make the ratio noise.
+                float own = Vector3.Dot(surfaces[si].lift, liftDir);
+                float vaporShare = Mathf.Abs(own) > AgainstCos * surfaces[si].lift.magnitude + 1e-3f
+                    ? Mathf.Clamp01(Vector3.Dot(surfaces[si].vaporLift, liftDir) / own) : 1f;
                 for (int k = 0; k < gammaCount[si]; k++)
                 {
                     float g, c, share;
                     TrailedVorticity.PanelLoading(si, k, out g, out c, out share);
-                    gammaOf[gammaStart[si] + k] = g;
+                    gammaOf[gammaStart[si] + k] = g * vaporShare;
                     chordOf[gammaStart[si] + k] = c * Mathf.Clamp01(share);
                 }
+            }
 
             for (int si = 0; si < surfaces.Count; si++)
             {

@@ -64,10 +64,10 @@ namespace VortexVapor
             catch (Exception e) { Debug.Log("[VORTEX] wing vapor: aero setup failed, vapor disabled: " + e); setupOk = false; }
             if (!setupOk) { disabled = true; yield break; }
             TrailedVorticity.BuildLines = false;   // the trailing lines are for the wake research, not shipped
-            Retarget(FlightGlobals.ActiveVessel);
+            Follow(FlightGlobals.ActiveVessel);
             GameEvents.onVesselChange.Add(OnVesselChange);
             string version = global::WingtipVortex.ModVersion;
-            Debug.Log($"[VORTEX] wing vapor: WingtipVortex v{version} starting on {vessel.vesselName}"
+            Debug.Log($"[VORTEX] wing vapor: WingtipVortex v{version} starting on {(vessel != null ? vessel.vesselName : "nothing yet")}"
                       + (Verbose ? " (verbose log on)" : ""));
         }
 
@@ -86,6 +86,8 @@ namespace VortexVapor
         // A new craft starts with no vapor, and every cache is keyed by the old craft's parts.
         void Retarget(Vessel v)
         {
+            if (v != null && v != vessel)
+                Debug.Log($"[VORTEX] wing vapor: now on {Name(v)}" + (vessel != null ? $" (off {Name(vessel)})" : ""));
             vessel = v;
             bodies.vessel = v;
             bodies.Clear();
@@ -100,7 +102,31 @@ namespace VortexVapor
                        && (float)v.atmDensity / Mathf.Max((float)v.mainBody.atmDensityASL, 1e-4f) >= Condensation.CutoffRatio;
         }
 
-        void OnVesselChange(Vessel v) { Retarget(v); }
+        // Moves the vapor to the active craft, except onto a fired missile (BDArmoryCraft.IsMissile):
+        // BDArmory makes a missile the active vessel to follow it, and the vapor then left the
+        // aircraft that fired it for a craft with no stock lifting surfaces to condense on. It
+        // stays on the aircraft instead, which keeps drawing its own vapor while you watch the shot.
+        // `skippedMissile` is the missile last declined, so the per-step poll does not re-test it.
+        Vessel skippedMissile;
+        void Follow(Vessel active)
+        {
+            if (active == null || active == vessel || active == skippedMissile) return;
+            if (BDArmoryCraft.IsMissile(active))
+            {
+                skippedMissile = active;
+                bool keep = vessel != null && vessel.loaded;
+                Debug.Log($"[VORTEX] wing vapor: camera on missile {Name(active)}, "
+                          + (keep ? $"staying on {Name(vessel)}" : "no aircraft to stay on"));
+                if (!keep) Retarget(null);
+                return;
+            }
+            skippedMissile = null;
+            Retarget(active);
+        }
+
+        static string Name(Vessel v) { return KSP.Localization.Localizer.Format(v.vesselName); }
+
+        void OnVesselChange(Vessel v) { Follow(v); }
 
         void FixedUpdate()
         {
@@ -123,10 +149,12 @@ namespace VortexVapor
 
         void PhysicsStep()
         {
-            if (vessel == null) return;
-            if (vessel != FlightGlobals.ActiveVessel && FlightGlobals.ActiveVessel != null)
-                Retarget(FlightGlobals.ActiveVessel);
-            if (!vessel.loaded) return;
+            // The aircraft the vapor was held on (see Follow) destroyed while the camera was on a
+            // missile: nothing switched vessels, so drop its vapor here. Unity's == null is true
+            // for a destroyed object whose reference is still set.
+            if (vessel == null && !ReferenceEquals(vessel, null)) Retarget(null);
+            Follow(FlightGlobals.ActiveVessel);
+            if (vessel == null || !vessel.loaded) return;
 
             // On-rails warp: flush rather than carry vapor through it.
             if (vessel.packed)
@@ -230,18 +258,10 @@ namespace VortexVapor
             return Condensation.RelativeHumidity((float)vessel.atmDensity, RhoSeaLevel(), (float)vessel.atmosphericTemperature);
         }
 
-        // Fraction of full sunlight reaching the vessel, 0-1, on any body, measured the way the
-        // wingtip vortices measure it: the solar flux the vessel actually receives against the
-        // unshadowed flux at its distance from the star. Planet shadow and eclipses fall out of it.
-        float Daylight()
-        {
-            CelestialBody star = Planetarium.fetch != null ? Planetarium.fetch.Sun : null;
-            if (star == null) return 1f;
-            double d = (vessel.CoMD - star.position).magnitude;
-            if (d <= 1.0) return 1f;
-            double full = PhysicsGlobals.SolarLuminosity / (4.0 * System.Math.PI * d * d);
-            return full > 1.0 ? Mathf.Clamp01((float)(vessel.solarFlux / full)) : 1f;
-        }
+        // How lit the air around the vessel is, 0-1, measured the way the wingtip vortices measure
+        // it (Sunlight): by the sun's height above the craft's horizon, so an afternoon sun low in
+        // the sky no longer greys the vapor the way the atmosphere-absorbed solar flux did.
+        float Daylight() { return Sunlight.Fraction(vessel); }
 
         // Every second while there is vapor to look at, every five otherwise (verbose only): the
         // numbers the model rests on, so they can be checked against a real aircraft of similar

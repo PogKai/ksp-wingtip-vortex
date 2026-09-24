@@ -68,6 +68,9 @@ namespace VortexVapor
 
         public bool Contains(Vector3 world)
         {
+            // A part destroyed since the snapshot: VesselBodies.Refresh runs half a stride before
+            // the vapor queries it, and in combat a part can be shot off in between.
+            if (t == null) return false;
             Vector3 l = t.InverseTransformPoint(world) - center;
             return Mathf.Abs(l.x) <= extents.x && Mathf.Abs(l.y) <= extents.y && Mathf.Abs(l.z) <= extents.z;
         }
@@ -98,7 +101,7 @@ namespace VortexVapor
             foreach (Part p in parts)
             {
                 PartBox b = AeroState.GetBox(p);
-                if (b == null) continue;
+                if (b == null || b.t == null) continue;
                 int k = boxes.Count;
                 boxes.Add(b);
                 ids.Add(p.flightID);
@@ -224,22 +227,49 @@ namespace VortexVapor
         static Vector3 Axis(int i) { return i == 0 ? Vector3.right : (i == 1 ? Vector3.up : Vector3.forward); }
 
         // The lifting parts as TrailedVorticity takes them, lift in newtons.
+        //
+        // vaporLift: a control surface that responds to roll (a taileron, an elevon, an all-moving
+        // stabilator) condenses only from the load its symmetry group carries together, the mean
+        // of their lifts. A pure roll deflects the two halves equal and opposite, the mean is zero,
+        // and neither fogs; a pull loads both alike and they fog as before. Stock hands a small,
+        // fully deflected surface a lift coefficient no real tail reaches, with no downwash from
+        // the wing ahead and no lag before the roll rate damps it, so the half deflected with the
+        // aircraft's lift used to fog at every roll input while the wing stayed clear. A STYLE RULE
+        // like WingVapor.CondenseAgainstLift, not physics: a real stabilator deflected hard at high
+        // load can condense briefly. The wake still sheds from the full lift.
         public static void Surfaces(List<PartAeroState> parts, List<Surface> into)
         {
             into.Clear();
+            liftOf.Clear();
+            foreach (var p in parts) liftOf[p.part] = p.liftForce;
             foreach (var p in parts)
             {
                 if (p.box == null || p.box.planform == null) continue;
+                Vector3 vaporLift = p.liftForce;
+                var cs = p.part.FindModuleImplementing<ModuleControlSurface>();
+                if (cs != null && !cs.ignoreRoll && p.part.symmetryCounterparts != null && p.part.symmetryCounterparts.Count > 0)
+                {
+                    Vector3 sum = p.liftForce;
+                    int count = 1;
+                    foreach (Part c in p.part.symmetryCounterparts)
+                    {
+                        Vector3 l;
+                        if (c != null && liftOf.TryGetValue(c, out l)) { sum += l; count++; }
+                    }
+                    vaporLift = sum / count;
+                }
                 into.Add(new Surface
                 {
                     id = p.part.flightID,
                     name = p.part.name,
                     planform = p.box.planform,
                     frame = p.box.Frame(),
-                    lift = p.liftForce * 1000f   // kN -> N
+                    lift = p.liftForce * 1000f,   // kN -> N
+                    vaporLift = vaporLift * 1000f
                 });
             }
         }
+        static readonly Dictionary<Part, Vector3> liftOf = new Dictionary<Part, Vector3>();
 
         public static void Init()
         {

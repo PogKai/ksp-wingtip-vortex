@@ -365,6 +365,33 @@ public class WingtipVortex : MonoBehaviour
     private float contrailMinVertexDist = 1.5f;    // contrails are near-straight; sample coarsely
     private float contrailWidthScale = 2.2f;
 
+    // CONTRAIL SPREADING. A real high-altitude contrail goes through two regimes. While the wake's
+    // vortex pair is intact it holds the ice in two tight cores and the trail stays narrow and
+    // sharp. Then the pair breaks up (Crow instability links the cores into rings, and they burst),
+    // the ice is released into the surrounding air, and the trail widens far faster than
+    // diffusion alone would widen it — the familiar crisp double line that turns soft and wide a
+    // way behind the aircraft. After that it thins as it spreads: the same ice over more width.
+    //
+    // The wake here lives seconds, not minutes, so this is that sequence compressed onto the
+    // trail's own lifetime: flat until contrailSpreadStart, then an accelerating (quadratic)
+    // widening to 1 + contrailSpreadMax at the end, on top of tailRatio's steady spread. Scaled by
+    // contrailBlend, so it is a cold-air effect only; a low manoeuvre puff never does it.
+    // Opacity falls as spread^-contrailSpreadDimPow: less than the column-density answer (-1),
+    // because a spreading contrail is still visibly there as a soft band rather than vanishing.
+    private float contrailSpreadStart = 0.5f;     // fraction of lifetime before breakup
+    private float contrailSpreadMax = 2.0f;       // extra width at the very end, x
+    private float contrailSpreadDimPow = 0.4f;
+    // The tube closes its last ribbonEndFade of length to a point so it never ends as a blunt
+    // disc. At full contrailBlend that window shrinks to this, so the closure rounds off the tip
+    // instead of cancelling the spread across the whole last quarter.
+    private float contrailEndFade = 0.08f;
+
+    float ContrailSpread(float ageFrac, float contrailBlend)
+    {
+        float s = Mathf.Clamp01((ageFrac - contrailSpreadStart) / Mathf.Max(1f - contrailSpreadStart, 0.01f));
+        return 1f + contrailSpreadMax * contrailBlend * s * s;
+    }
+
     // Line mode is now only the extreme-velocity regime, where its reentry width clamp and
     // stress-damped procedural terms still earn their place. Was 250 m/s, which dragged ordinary
     // jet cruise into line mode and left the trail module unused exactly where contrails belong.
@@ -3045,6 +3072,12 @@ public class WingtipVortex : MonoBehaviour
             float endPos = (n > 1) ? (float)src / (n - 1) : 0f;
             float endFade = 1f - Mathf.Clamp01((endPos - (1f - ribbonEndFade)) / Mathf.Max(ribbonEndFade, 0.01f));
             endFade = endFade * endFade * (3f - 2f * endFade);
+            // Radius closes over a shorter window in the contrail band (see contrailEndFade);
+            // alpha keeps the full window, so the wide end still fades out softly.
+            float endWin = Mathf.Lerp(ribbonEndFade, contrailEndFade, contrailBlend);
+            float endFadeR = 1f - Mathf.Clamp01((endPos - (1f - endWin)) / Mathf.Max(endWin, 0.01f));
+            endFadeR = endFadeR * endFadeR * (3f - 2f * endFadeR);
+            float spread = ContrailSpread(ageFrac, contrailBlend);
 
             // See ribbonHeadRampFraction. Width comes up linearly, alpha as 1-(1-u)^2.
             float headU = Mathf.Clamp01(endPos / Mathf.Max(ribbonHeadRampFraction, 0.01f));
@@ -3088,8 +3121,8 @@ public class WingtipVortex : MonoBehaviour
             float radius = ribbonRadiusScale * r.shed[src] * widthScale
                            * Mathf.Lerp(headWidthFraction, 1f, grow)
                            * Mathf.Lerp(1f, tailRatio, ageFrac)
-                           * diffG * bdFlare
-                           * endFade * headWidth;
+                           * diffG * bdFlare * spread
+                           * endFadeR * headWidth;
 
             // Ramp in over the head, full brightness until ribbonPeakFraction, then a taper
             // spanning everything after it.
@@ -3097,7 +3130,8 @@ public class WingtipVortex : MonoBehaviour
                                         / Mathf.Max(1f - ribbonPeakFraction, 0.01f));
             float alpha = live
                 ? Mathf.Clamp01(r.shed[src] * trailAlphaGain * (1f - Mathf.Pow(fadeT, ribbonFadePow))
-                                * endFade * headAlpha * CoreDim(diffG) * bdFade)
+                                * endFade * headAlpha * CoreDim(diffG) * bdFade
+                                * Mathf.Pow(spread, -contrailSpreadDimPow))
                 : 0f;
             if (!live) radius = 0f;
 
@@ -4432,6 +4466,7 @@ public class WingtipVortex : MonoBehaviour
             // geometry actually covers, which is what the growth law needs.
             widthKeys[k] = new Keyframe(u, shed
                                            * Mathf.Lerp(1f, tailRatio, u)
+                                           * ContrailSpread(u, contrailBlend)
                                            * CoreGrowth(Mathf.Lerp(headAge, tailAge, u), groundRateMult)
                                            * Mathf.Lerp(headWidthFraction, 1f, ramp));
         }
@@ -4448,7 +4483,8 @@ public class WingtipVortex : MonoBehaviour
             float fadeT = Mathf.Clamp01((u - ribbonPeakFraction)
                                         / Mathf.Max(1f - ribbonPeakFraction, 0.01f));
             // Paired with the CoreGrowth applied to the width keys above, for the same reason.
-            float dim = CoreDim(CoreGrowth(Mathf.Lerp(headAge, tailAge, u), groundRateMult));
+            float dim = CoreDim(CoreGrowth(Mathf.Lerp(headAge, tailAge, u), groundRateMult))
+                        * Mathf.Pow(ContrailSpread(u, contrailBlend), -contrailSpreadDimPow);
             shedAlphaKeys[k] = new GradientAlphaKey(
                 Mathf.Clamp01(shed * trailAlphaGain * (1f - Mathf.Pow(fadeT, fadePow)) * dim), u);
         }

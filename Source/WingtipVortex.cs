@@ -1047,6 +1047,23 @@ public class WingtipVortex : MonoBehaviour
         }
     }
 
+    // Surface detection by module name. FAR swaps the stock modules for its own on every wing it
+    // patches (ModuleLiftingSurface -> FARWingAerodynamicModel, ModuleControlSurface ->
+    // FARControllableSurface), so matching only the stock names finds no wings under FAR and no
+    // vortex ever spawns. Names, not types, so FAR stays an optional dependency. Lift and control
+    // stay separate the way stock keeps them: a control surface is not a "lift" part.
+    internal static bool IsLiftPart(Part p)
+    {
+        return p.Modules.Contains("ModuleLiftingSurface") || p.Modules.Contains("FARWingAerodynamicModel");
+    }
+
+    internal static bool IsControlPart(Part p)
+    {
+        return p.Modules.Contains("ModuleControlSurface") || p.Modules.Contains("FARControllableSurface");
+    }
+
+    internal static bool IsAeroSurface(Part p) { return IsLiftPart(p) || IsControlPart(p); }
+
     // Low-pass on the LIFT MEASUREMENT, which is a different thing from the build/decay rates
     // above and must not be confused with them. KSP recomputes liftForce at physics rate off
     // instantaneous part velocity, and KSP airframes visibly flex at their joints, so the raw sum
@@ -1988,8 +2005,8 @@ public class WingtipVortex : MonoBehaviour
         foreach (Part p in vessel.parts)
         {
             if (p == null) continue;
-            bool hasLift = p.Modules.Contains("ModuleLiftingSurface");
-            bool hasCtrl = p.Modules.Contains("ModuleControlSurface");
+            bool hasLift = IsLiftPart(p);
+            bool hasCtrl = IsControlPart(p);
             if (!hasLift && !hasCtrl) continue;
             // In the resolved frame: lat = span station, vert = height, fwd = nose-positive.
             // The raw local components this used to print were whichever axes the root part
@@ -2260,8 +2277,7 @@ public class WingtipVortex : MonoBehaviour
         foreach (Part p in vessel.parts)
         {
             if (p == null) continue;
-            if (!p.Modules.Contains("ModuleLiftingSurface") &&
-                !p.Modules.Contains("ModuleControlSurface")) continue;
+            if (!IsAeroSurface(p)) continue;
 
             Bounds b;
             if (!TryGetPartBounds(p, out b)) continue;
@@ -2345,8 +2361,7 @@ public class WingtipVortex : MonoBehaviour
             if (p == null) continue;
 
             // The gate the old main-wing pass computed and then never applied.
-            if (!p.Modules.Contains("ModuleLiftingSurface") &&
-                !p.Modules.Contains("ModuleControlSurface")) continue;
+            if (!IsAeroSurface(p)) continue;
 
             // Same rejection as the vessel measurement — otherwise a part carrying a
             // cull-defeating renderer wins every slot with an extremity of 1e18.
@@ -3222,8 +3237,8 @@ public class WingtipVortex : MonoBehaviour
                 // which is the very duplication the selection above exists to prevent.
                 if (restrictTo != null && !restrictTo.Contains(p)) continue;
 
-                bool isLift = p.Modules.Contains("ModuleLiftingSurface");
-                bool isControl = p.Modules.Contains("ModuleControlSurface");
+                bool isLift = IsLiftPart(p);
+                bool isControl = IsControlPart(p);
 
                 // HARD FILTER: only real lifting surfaces (this is the missing piece)
                 if (!isLift) continue;
@@ -4556,7 +4571,7 @@ public class WingtipVortexManager : MonoBehaviour
         for (int i = 0; i < v.parts.Count; i++)
         {
             Part p = v.parts[i];
-            if (p != null && p.Modules != null && (p.Modules.Contains("ModuleLiftingSurface") || p.Modules.Contains("ModuleControlSurface")))
+            if (p != null && p.Modules != null && WingtipVortex.IsAeroSurface(p))
                 return !VortexVapor.BDArmoryCraft.IsMissile(v);   // a modular missile built on stock fins
         }
         return false;

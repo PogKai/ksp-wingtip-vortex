@@ -125,13 +125,18 @@ namespace VortexVapor
         }
     }
 
-    // Reads per-part lift/drag every physics frame. FAR detection is ported from WingtipVortex's
-    // own FARBridge: reflection-bound, no hard dependency, incompatible FAR just leaves
-    // FarAvailable false. See DESIGN.md "Spanwise circulation" for why FAR mode doesn't yet do
-    // more than stock mode despite being detected here.
+    // Reads per-part lift/drag every physics frame, from stock's ModuleLiftingSurface or from
+    // FAR's FARWingAerodynamicModel, which FAR puts on wings in place of the stock module. FAR is
+    // bound by reflection: no hard dependency, and a missing or incompatible FAR just leaves
+    // FarAvailable false and the stock path running alone.
     public static class AeroState
     {
         private static MethodInfo miAeroForce;
+        private static Type farWingType;          // ferram4.FARWingAerodynamicModel
+        private static Type farCtrlType;          // ferram4.FARControllableSurface, a subclass of it
+        private static FieldInfo fiWorldForce;    // this wing's own aero force, world space, kN
+        private static FieldInfo fiShielded;      // FAR stops updating the force while shielded
+        private static FieldInfo fiRollAxis;      // % roll authority; 0 = ignores roll
         private static bool initialized = false;
         private static bool farAvailable = false;
 
@@ -246,8 +251,7 @@ namespace VortexVapor
             {
                 if (p.box == null || p.box.planform == null) continue;
                 Vector3 vaporLift = p.liftForce;
-                var cs = p.part.FindModuleImplementing<ModuleControlSurface>();
-                if (cs != null && !cs.ignoreRoll && p.part.symmetryCounterparts != null && p.part.symmetryCounterparts.Count > 0)
+                if (RespondsToRoll(p.part) && p.part.symmetryCounterparts != null && p.part.symmetryCounterparts.Count > 0)
                 {
                     Vector3 sum = p.liftForce;
                     int count = 1;
@@ -271,6 +275,21 @@ namespace VortexVapor
         }
         static readonly Dictionary<Part, Vector3> liftOf = new Dictionary<Part, Vector3>();
 
+        // A control surface wired to roll: stock's ignoreRoll, or FAR's roll authority percentage.
+        static bool RespondsToRoll(Part part)
+        {
+            var cs = part.FindModuleImplementing<ModuleControlSurface>();
+            if (cs != null) return !cs.ignoreRoll;
+            if (farCtrlType == null || fiRollAxis == null) return false;
+            foreach (PartModule pm in part.Modules)
+            {
+                if (!farCtrlType.IsInstanceOfType(pm)) continue;
+                try { return (float)fiRollAxis.GetValue(pm) != 0f; }
+                catch { return false; }
+            }
+            return false;
+        }
+
         public static void Init()
         {
             if (initialized) return;
@@ -283,21 +302,55 @@ namespace VortexVapor
                     Type farApi = asm.GetType("FerramAerospaceResearch.FARAPI");
                     if (farApi == null) continue;
                     miAeroForce = farApi.GetMethod("VesselAerodynamicForce", new[] { typeof(Vessel) });
-                    farAvailable = miAeroForce != null;
+                    farWingType = asm.GetType("ferram4.FARWingAerodynamicModel");
+                    farCtrlType = asm.GetType("ferram4.FARControllableSurface");
+                    if (farWingType != null)
+                    {
+                        fiWorldForce = farWingType.GetField("worldSpaceForce", BindingFlags.Public | BindingFlags.Instance);
+                        fiShielded = farWingType.GetField("isShielded", BindingFlags.Public | BindingFlags.Instance);
+                    }
+                    if (farCtrlType != null)
+                        fiRollAxis = farCtrlType.GetField("rollaxis", BindingFlags.Public | BindingFlags.Instance);
+                    farAvailable = fiWorldForce != null && fiWorldForce.FieldType == typeof(Vector3);
                     break;
                 }
             }
             catch { farAvailable = false; }
+            if (!farAvailable) farWingType = farCtrlType = null;
             Debug.Log(farAvailable
-                ? "[VORTEX] wing vapor: FAR detected: FAR replaces the stock lifting modules this mod reads, so no wing vapor will appear"
-                : "[VORTEX] wing vapor: FAR not detected, using the stock lifting surfaces");
+                ? "[VORTEX] wing vapor: FAR detected, reading each wing's lift from FAR"
+                : "[VORTEX] wing vapor: FAR not detected (or API mismatch), using the stock lifting surfaces");
         }
 
-        // Stock path: every lifting part reports its own liftForce/dragForce directly, so this is
-        // a real per-part read regardless of which aero model stock itself is running. One entry
+        // FAR's per-wing force, split into lift and drag the way FAR itself splits it: drag is the
+        // part along the airflow. FAR leaves worldSpaceForce at its last value when it stops
+        // computing (out of the air, crawling, shielded in a bay), so those cases read as zero here.
+        static bool TryReadFarWing(PartModule pm, Vessel vessel, Vector3 flowDir, ref Vector3 lift, ref Vector3 drag)
+        {
+            if (farWingType == null || !farWingType.IsInstanceOfType(pm)) return false;
+            try
+            {
+                if (vessel.atmDensity <= 0 || flowDir == Vector3.zero) return true;
+                if (fiShielded != null && (bool)fiShielded.GetValue(pm)) return true;
+                Vector3 f = (Vector3)fiWorldForce.GetValue(pm);
+                Vector3 d = Vector3.Dot(f, flowDir) * flowDir;
+                drag += d;
+                lift += f - d;
+            }
+            catch
+            {
+                // A changed FAR surfaces here; stop reading it rather than throw every frame.
+                farAvailable = false;
+                farWingType = farCtrlType = null;
+            }
+            return true;
+        }
+
+        // Every lifting part reports its own lift/drag, from ModuleLiftingSurface under stock or
+        // FARWingAerodynamicModel under FAR, so this is a real per-part read either way. One entry
         // per part: a part carrying more than one lifting module is still one surface with one
-        // pair of span edges.
-        public static List<PartAeroState> ReadStock(Vessel vessel)
+        // pair of span edges. flowDir is the unit direction of the vessel's motion through the air.
+        public static List<PartAeroState> Read(Vessel vessel, Vector3 flowDir)
         {
             var result = scratch;   // reused every call; callers must not hold it across frames
             result.Clear();
@@ -310,7 +363,11 @@ namespace VortexVapor
                 foreach (PartModule pm in p.Modules)
                 {
                     ModuleLiftingSurface mls = pm as ModuleLiftingSurface;
-                    if (mls == null) continue;
+                    if (mls == null)
+                    {
+                        if (TryReadFarWing(pm, vessel, flowDir, ref lift, ref drag)) lifting = true;
+                        continue;
+                    }
                     lifting = true;
                     lift += mls.liftForce;
                     drag += mls.dragForce;
@@ -329,9 +386,8 @@ namespace VortexVapor
             return result;
         }
 
-        // FAR replaces ModuleLiftingSurface, so there is no per-part split to read under FAR —
-        // FARAPI.VesselAerodynamicForce gives one whole-vessel force. A real per-section pull
-        // needs FAR's internal per-section solve, which FARAPI does not expose today.
+        // Whole-vessel force from FARAPI, fuselage included. The per-wing read above is what the
+        // vapor uses; this stays for anything that wants the vessel total.
         public static Vector3 ReadVesselForceFAR(Vessel vessel)
         {
             if (!farAvailable || vessel == null) return Vector3.zero;

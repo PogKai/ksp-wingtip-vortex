@@ -191,7 +191,7 @@ namespace VortexVapor
             }
             else if (step % stride == 0)
             {
-                parts = AeroState.ReadStock(vessel);
+                parts = AeroState.Read(vessel, -downstream);
                 AeroState.Surfaces(parts, surfaces);
                 stride = Mathf.Clamp((surfaces.Count + PartsPerStride - 1) / PartsPerStride, 1, MaxStride);
                 if (surfaces.Count > 0)

@@ -93,6 +93,12 @@ breakdown is much less exaggerated.
   at a destroyed part, and the `NullReferenceException` counted toward the five errors after which
   the wing vapor turns itself off for the flight.
 
+### License
+
+* **1.3.0 is the first release under CC BY-NC-SA 4.0.** Free to use, change and share with credit,
+  never to sell, and anything shared that's built from it goes under the same license. Versions up
+  to 1.2.0 stay under the MIT License they were published with. See [license.md](license.md).
+
 ---
 
 ## 1.2.0 — Wing Vapor

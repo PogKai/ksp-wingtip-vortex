@@ -2991,7 +2991,7 @@ public class WingtipVortex : MonoBehaviour
         return Mathf.Pow(growth, -coreDimPow);
     }
 
-    void BuildRibbonMesh(WakeRibbon r, float now, float widthScale, float contrailBlend, float life)
+    void BuildRibbonMesh(WakeRibbon r, float now, float widthScale, float contrailBlend, float life, float inwardScale)
     {
         int K = Mathf.Max(3, ribbonSides);
         int rings = r.pts.Length;
@@ -3141,7 +3141,15 @@ public class WingtipVortex : MonoBehaviour
             // nothing already shed can be re-aimed by later manoeuvring.
             float ease = Mathf.Clamp01(arc / Mathf.Max(ribbonInwardGrow, 0.01f));
             ease = ease * ease * (3f - 2f * ease);
-            Vector3 centre = p + r.inDir[src] * (ribbonInwardAmp * r.shed[src] * ease);
+            // Scaled by the SOURCE's strength, not by this ring's shed. Shed is the live load at
+            // the moment the ring was laid, so any wobble in the load (a pitch oscillation at high
+            // q, FAR's control surfaces working) moved consecutive rings inward by different
+            // amounts and the centreline zigzagged sideways — worst at altitude, where the wide
+            // contrail tube makes it obvious. Where a vortex pair settles is set by the span
+            // loading's SHAPE, (1 - pi/4) b/2 inboard for an elliptic wing, not by how much lift
+            // it carries, so the offset should not follow the load at all. A secondary still
+            // curves in by its fixed strength, which was the reason for scaling this in 1.1.5.
+            Vector3 centre = p + r.inDir[src] * (ribbonInwardAmp * inwardScale * ease);
 
             // Ground-effect drift: zero at the head, opening linearly with the ring's own age.
             if (r.geFac[src] > 0f)
@@ -4227,7 +4235,8 @@ public class WingtipVortex : MonoBehaviour
                                                  ribbonSmoothAmount);
                 }
 
-                BuildRibbonMesh(rb, now, rScale * Mathf.Lerp(1f, contrailWidthScale, contrailBlend), contrailBlend, life);
+                BuildRibbonMesh(rb, now, rScale * Mathf.Lerp(1f, contrailWidthScale, contrailBlend), contrailBlend, life,
+                                Mathf.Clamp01(strengths[i]));
             }
 
             // Width and colour are applied whether or not we are still shedding: a trail that has

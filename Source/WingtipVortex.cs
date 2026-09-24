@@ -989,13 +989,22 @@ public class WingtipVortex : MonoBehaviour
 
     // FAR REPLACES ModuleLiftingSurface on every wing it touches, so liftSurfaces above comes up
     // empty under FAR and the load factor below silently degrades to geeForce — precisely the
-    // "climbing on thrust alone spawns vortices" case this file exists to avoid. FARAPI exposes
-    // real per-vessel aerodynamic force, so read that instead when FAR is running. Bound by
-    // reflection so there is no hard dependency: a missing or incompatible FAR just leaves
-    // FARBridge.Available false and the mod behaves exactly as it did before FAR was considered.
+    // "climbing on thrust alone spawns vortices" case this file exists to avoid. So under FAR the
+    // sum reads each FARWingAerodynamicModel's own force instead: the same quantity as the stock
+    // sum, lift on the lifting surfaces only.
+    //
+    // Per wing, deliberately NOT FARAPI.VesselAerodynamicForce (what 1.2 read). That is the whole
+    // vessel's force, fuselage body lift included, and body lift sheds weak vortices off the
+    // fuselage, not off the wingtips; counting it made a FAR craft reach every onset threshold at
+    // a lower wing loading than the same craft under stock.
+    //
+    // Bound by reflection so there is no hard dependency: a missing or incompatible FAR just
+    // leaves FARBridge.Available false and the mod behaves exactly as it did before FAR.
     static class FARBridge
     {
-        private static System.Reflection.MethodInfo miAeroForce;
+        private static System.Type wingType;                       // ferram4.FARWingAerodynamicModel
+        private static System.Reflection.FieldInfo fiWorldForce;   // this wing's force, world space, kN
+        private static System.Reflection.FieldInfo fiShielded;
         private static bool initialized = false;
         private static bool available = false;
 
@@ -1010,42 +1019,66 @@ public class WingtipVortex : MonoBehaviour
                 foreach (System.Reflection.Assembly asm in System.AppDomain.CurrentDomain.GetAssemblies())
                 {
                     if (!asm.GetName().Name.StartsWith("FerramAerospaceResearch")) continue;
-                    System.Type farApi = asm.GetType("FerramAerospaceResearch.FARAPI");
-                    if (farApi == null) continue;
-                    miAeroForce = farApi.GetMethod("VesselAerodynamicForce", new[] { typeof(Vessel) });
-                    available = miAeroForce != null;
+                    wingType = asm.GetType("ferram4.FARWingAerodynamicModel");
+                    if (wingType == null) continue;
+                    var flags = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance;
+                    fiWorldForce = wingType.GetField("worldSpaceForce", flags);
+                    fiShielded = wingType.GetField("isShielded", flags);
+                    available = fiWorldForce != null && fiWorldForce.FieldType == typeof(Vector3);
                     break;
                 }
             }
             catch { available = false; }
             Debug.Log(available
-                ? "[VORTEX] FAR detected — reading lift from FARAPI"
+                ? "[VORTEX] FAR detected — reading lift from FAR's wing modules"
                 : "[VORTEX] FAR not detected (or API mismatch) — reading lift from stock modules");
         }
 
-        // Total aerodynamic force in world space, kN — the same convention ModuleLiftingSurface.
-        // liftForce already uses, so the caller needs no unit conversion. Lift is isolated by
-        // dropping the component of that force lying along the flow direction (drag).
-        public static float GetLiftKN(Vessel v, Vector3 flowNormalized)
+        // The vessel's FAR wing modules, for the bounds timer to cache alongside liftSurfaces.
+        // FARControllableSurface derives from FARWingAerodynamicModel, so control surfaces come too.
+        public static void FindWings(Vessel v, List<PartModule> into)
         {
-            if (!available || v == null) return 0f;
+            into.Clear();
+            if (!available || v == null) return;
+            foreach (Part p in v.parts)
+            {
+                if (p == null) continue;
+                foreach (PartModule pm in p.Modules)
+                    if (wingType.IsInstanceOfType(pm)) into.Add(pm);
+            }
+        }
+
+        // Sum of each wing's lift magnitude, kN: the same convention as summing
+        // ModuleLiftingSurface.liftForce.magnitude, so a tail carrying download adds rather than
+        // cancels, exactly as it does under stock. Lift is each wing's force less its component
+        // along the flow (drag), the split FAR itself uses. FAR leaves worldSpaceForce at its last
+        // value when it stops computing (vacuum, shielded in a bay), so those wings count as zero.
+        public static float GetLiftKN(Vessel v, List<PartModule> wings, Vector3 flowNormalized)
+        {
+            if (!available || v == null || v.atmDensity <= 0) return 0f;
+            float sum = 0f;
             try
             {
-                Vector3 aero = (Vector3)miAeroForce.Invoke(null, new object[] { v });
-                if (aero.sqrMagnitude < 1e-8f) return 0f;
-                Vector3 drag = Vector3.Dot(aero, flowNormalized) * flowNormalized;
-                return (aero - drag).magnitude;
+                for (int i = 0; i < wings.Count; i++)
+                {
+                    PartModule pm = wings[i];
+                    if (pm == null) continue;   // Unity null check also catches destroyed parts
+                    if (fiShielded != null && (bool)fiShielded.GetValue(pm)) continue;
+                    Vector3 f = (Vector3)fiWorldForce.GetValue(pm);
+                    sum += (f - Vector3.Dot(f, flowNormalized) * flowNormalized).magnitude;
+                }
             }
             catch
             {
-                // A version mismatch surfaces here rather than at Init(), since the method can
-                // resolve but still throw on a changed signature. Stop trying rather than pay
+                // A changed FAR surfaces here rather than at Init(). Stop trying rather than pay
                 // this try/catch every physics frame for the rest of the flight.
                 available = false;
                 return 0f;
             }
+            return sum;
         }
     }
+    private List<PartModule> farWings = new List<PartModule>();
 
     // Surface detection by module name. FAR swaps the stock modules for its own on every wing it
     // patches (ModuleLiftingSurface -> FARWingAerodynamicModel, ModuleControlSurface ->
@@ -1962,6 +1995,7 @@ public class WingtipVortex : MonoBehaviour
         // Lifting surfaces and local gravity, cached here for the same reason. ModuleControlSurface
         // derives from ModuleLiftingSurface, so this one lookup catches canards and elevons too.
         liftSurfaces = vessel.FindPartModulesImplementing<ModuleLiftingSurface>();
+        FARBridge.FindWings(vessel, farWings);
         gravityAccel = Mathf.Max((float)FlightGlobals.getGeeForceAtPosition(vessel.CoM).magnitude, 0.01f);
     }
 
@@ -3477,11 +3511,11 @@ public class WingtipVortex : MonoBehaviour
         // Dividing by weight keeps the result a load factor, so every threshold downstream
         // (the 3G onset, the 4.5G canard gate) keeps the meaning it was tuned with.
         // Under FAR, ModuleLiftingSurface is gone from every patched part, so liftSurfaces is
-        // empty and there is nothing for the loop below to sum — read FARAPI's own force instead.
+        // empty and there is nothing for the loop below to sum — sum FAR's wing modules instead.
         float liftKN;
         if (FARBridge.Available)
         {
-            liftKN = FARBridge.GetLiftKN(vessel, flow);
+            liftKN = FARBridge.GetLiftKN(vessel, farWings, flow);
         }
         else
         {

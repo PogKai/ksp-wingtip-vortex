@@ -221,7 +221,7 @@ namespace VortexVapor
                 {
                     for (int b = 0; b < Strips; b++)
                     {
-                        float gamma = 0f, flapGamma = 0f, chord = 0f;
+                        float gamma = 0f, flapGamma = 0f, chord = 0f, leadStall = 0f;
                         for (int k = f.stripStart[b]; k < f.stripStart[b + 1]; k++)
                         {
                             int mi = f.memberIdx[k];
@@ -230,6 +230,7 @@ namespace VortexVapor
                             float g = f.memberSign[k] * gammaOf[gammaStart[mi] + idx];
                             gamma += g;
                             if (!f.memberLeads[k]) flapGamma += g;
+                            else leadStall = Mathf.Max(leadStall, surfaces[mi].stall);
                             chord += chordOf[gammaStart[mi] + idx];
                         }
                         // The section's loading over the members' own panel chords (each counted
@@ -245,6 +246,13 @@ namespace VortexVapor
                         float loading = perGamma * gamma * side, flapLoading = perGamma * flapGamma * side;
                         float ct, at;
                         Condensation.StripTerms(loading - flapLoading, flapLoading, q, out ct, out at);
+                        // A stalled section has no leading-edge suction peak: the flow has
+                        // separated from the nose, and what lift remains is spread over a flat,
+                        // shallow pressure field. So stall removes the angle-of-attack term, the
+                        // peak, and leaves the camber term. FAR reports stall per part (the
+                        // leading member of the section decides it); under stock it is always 0,
+                        // and Condensation.MaxPeakCp stands in for the stall stock never models.
+                        at *= 1f - leadStall;
                         stripCamberTerm[b] = ct; stripAlphaTerm[b] = at;
                         stripSideOf[b] = side;
                         stripBit[b] = side > 0f ? 1 : 2;   // the face the vapor would be on: a face inside a body has no flow over it

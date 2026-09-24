@@ -15,6 +15,8 @@ namespace VortexVapor
         // N, world: the share of `lift` the vapor may condense from. Equal to `lift` except on a
         // roll control surface, where it is the mean over its symmetry group (AeroState.Surfaces).
         public Vector3 vaporLift;
+        // 0..1: how much of the part is stalled. FAR reports it; stock has no stall model, so 0.
+        public float stall;
     }
 
     // Answers "which parts' volumes contain this point", as flight IDs, excluding one part.

@@ -16,6 +16,7 @@ namespace VortexVapor
         public Vector3 dragForce;   // world space, kN
         public Vector3 position;    // world space, centre of the part's mesh bounds
         public PartBox box;         // null if the part has no usable mesh
+        public float stall;         // 0..1, FAR's stalled fraction of this part; 0 under stock
     }
 
     // A part's geometry in its own frame, measured once from its meshes and cached: its bounds
@@ -133,10 +134,9 @@ namespace VortexVapor
     {
         private static MethodInfo miAeroForce;
         private static Type farWingType;          // ferram4.FARWingAerodynamicModel
-        private static Type farCtrlType;          // ferram4.FARControllableSurface, a subclass of it
         private static FieldInfo fiWorldForce;    // this wing's own aero force, world space, kN
         private static FieldInfo fiShielded;      // FAR stops updating the force while shielded
-        private static FieldInfo fiRollAxis;      // % roll authority; 0 = ignores roll
+        private static FieldInfo fiStall;         // 0..1 stalled fraction (protected double)
         private static bool initialized = false;
         private static bool farAvailable = false;
 
@@ -233,15 +233,18 @@ namespace VortexVapor
 
         // The lifting parts as TrailedVorticity takes them, lift in newtons.
         //
-        // vaporLift: a control surface that responds to roll (a taileron, an elevon, an all-moving
-        // stabilator) condenses only from the load its symmetry group carries together, the mean
-        // of their lifts. A pure roll deflects the two halves equal and opposite, the mean is zero,
+        // vaporLift: under stock, a control surface that responds to roll (a taileron, an elevon,
+        // an all-moving stabilator) condenses only from the load its symmetry group carries
+        // together, the mean of their lifts. A pure roll deflects the two halves equal and opposite, the mean is zero,
         // and neither fogs; a pull loads both alike and they fog as before. Stock hands a small,
         // fully deflected surface a lift coefficient no real tail reaches, with no downwash from
         // the wing ahead and no lag before the roll rate damps it, so the half deflected with the
         // aircraft's lift used to fog at every roll input while the wing stayed clear. A STYLE RULE
         // like WingVapor.CondenseAgainstLift, not physics: a real stabilator deflected hard at high
         // load can condense briefly. The wake still sheds from the full lift.
+        // Not applied under FAR: FAR models what the rule stands in for (the tail sits in the
+        // wing's downwash, lift coefficients stall at realistic values), so a FAR tail surface
+        // condenses from its own load and the physics decides.
         public static void Surfaces(List<PartAeroState> parts, List<Surface> into)
         {
             into.Clear();
@@ -269,25 +272,18 @@ namespace VortexVapor
                     planform = p.box.planform,
                     frame = p.box.Frame(),
                     lift = p.liftForce * 1000f,   // kN -> N
-                    vaporLift = vaporLift * 1000f
+                    vaporLift = vaporLift * 1000f,
+                    stall = p.stall
                 });
             }
         }
         static readonly Dictionary<Part, Vector3> liftOf = new Dictionary<Part, Vector3>();
 
-        // A control surface wired to roll: stock's ignoreRoll, or FAR's roll authority percentage.
+        // A stock control surface wired to roll. FAR's surfaces never match: see vaporLift above.
         static bool RespondsToRoll(Part part)
         {
             var cs = part.FindModuleImplementing<ModuleControlSurface>();
-            if (cs != null) return !cs.ignoreRoll;
-            if (farCtrlType == null || fiRollAxis == null) return false;
-            foreach (PartModule pm in part.Modules)
-            {
-                if (!farCtrlType.IsInstanceOfType(pm)) continue;
-                try { return (float)fiRollAxis.GetValue(pm) != 0f; }
-                catch { return false; }
-            }
-            return false;
+            return cs != null && !cs.ignoreRoll;
         }
 
         public static void Init()
@@ -303,20 +299,19 @@ namespace VortexVapor
                     if (farApi == null) continue;
                     miAeroForce = farApi.GetMethod("VesselAerodynamicForce", new[] { typeof(Vessel) });
                     farWingType = asm.GetType("ferram4.FARWingAerodynamicModel");
-                    farCtrlType = asm.GetType("ferram4.FARControllableSurface");
                     if (farWingType != null)
                     {
                         fiWorldForce = farWingType.GetField("worldSpaceForce", BindingFlags.Public | BindingFlags.Instance);
                         fiShielded = farWingType.GetField("isShielded", BindingFlags.Public | BindingFlags.Instance);
+                        fiStall = farWingType.GetField("stall", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance);
+                        if (fiStall != null && fiStall.FieldType != typeof(double)) fiStall = null;   // optional
                     }
-                    if (farCtrlType != null)
-                        fiRollAxis = farCtrlType.GetField("rollaxis", BindingFlags.Public | BindingFlags.Instance);
                     farAvailable = fiWorldForce != null && fiWorldForce.FieldType == typeof(Vector3);
                     break;
                 }
             }
             catch { farAvailable = false; }
-            if (!farAvailable) farWingType = farCtrlType = null;
+            if (!farAvailable) farWingType = null;
             Debug.Log(farAvailable
                 ? "[VORTEX] wing vapor: FAR detected, reading each wing's lift from FAR"
                 : "[VORTEX] wing vapor: FAR not detected (or API mismatch), using the stock lifting surfaces");
@@ -325,7 +320,7 @@ namespace VortexVapor
         // FAR's per-wing force, split into lift and drag the way FAR itself splits it: drag is the
         // part along the airflow. FAR leaves worldSpaceForce at its last value when it stops
         // computing (out of the air, crawling, shielded in a bay), so those cases read as zero here.
-        static bool TryReadFarWing(PartModule pm, Vessel vessel, Vector3 flowDir, ref Vector3 lift, ref Vector3 drag)
+        static bool TryReadFarWing(PartModule pm, Vessel vessel, Vector3 flowDir, ref Vector3 lift, ref Vector3 drag, ref float stall)
         {
             if (farWingType == null || !farWingType.IsInstanceOfType(pm)) return false;
             try
@@ -336,12 +331,13 @@ namespace VortexVapor
                 Vector3 d = Vector3.Dot(f, flowDir) * flowDir;
                 drag += d;
                 lift += f - d;
+                if (fiStall != null) stall = Mathf.Max(stall, Mathf.Clamp01((float)(double)fiStall.GetValue(pm)));
             }
             catch
             {
                 // A changed FAR surfaces here; stop reading it rather than throw every frame.
                 farAvailable = false;
-                farWingType = farCtrlType = null;
+                farWingType = null;
             }
             return true;
         }
@@ -360,12 +356,13 @@ namespace VortexVapor
                 if (p.Modules == null) continue;
                 bool lifting = false;
                 Vector3 lift = Vector3.zero, drag = Vector3.zero;
+                float stall = 0f;
                 foreach (PartModule pm in p.Modules)
                 {
                     ModuleLiftingSurface mls = pm as ModuleLiftingSurface;
                     if (mls == null)
                     {
-                        if (TryReadFarWing(pm, vessel, flowDir, ref lift, ref drag)) lifting = true;
+                        if (TryReadFarWing(pm, vessel, flowDir, ref lift, ref drag, ref stall)) lifting = true;
                         continue;
                     }
                     lifting = true;
@@ -380,7 +377,8 @@ namespace VortexVapor
                     liftForce = lift,
                     dragForce = drag,
                     position = box != null ? box.WorldCenter : p.transform.position,
-                    box = box
+                    box = box,
+                    stall = stall
                 });
             }
             return result;

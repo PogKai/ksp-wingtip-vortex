@@ -164,6 +164,10 @@ public class WingtipVortex : MonoBehaviour
     // seam winding along the rope, which is close to what real vortex vapour looks like.
     private float ribbonAspect = 0.4f;          // minor axis as a fraction of major
     private float ribbonStripe = 0.6f;          // 0 = uniform, 1 = one side fully dark
+    // Twist per ring (radians) at which the section starts rounding off, and is fully round.
+    // The ellipse aliases at pi/2 per ring; this finishes well before it. See BuildRibbonMesh.
+    private float twistAliasStart = 0.5f;
+    private float twistAliasFull = 1.0f;
 
     // CENTRELINE HELIX. The measured reason nothing looked like it was spiralling: the tube is
     // ~0.3 m across on a ~40 m wake, so from a chase camera its cross-section is one or two pixels
@@ -3189,6 +3193,23 @@ public class WingtipVortex : MonoBehaviour
             float twist = ribbonTwistPerMetre * r.odo[src];   // frozen for the same reason
             float uy = ageFrac;
 
+            // TWIST ALIASING. A ring is laid per frame, so ring spacing is speed / frame rate: ~4 m
+            // at 244 m/s and 60 fps, 8 m at 30 fps. At 0.25 rad/m that is 1-2 rad of twist between
+            // neighbouring rings, and an ellipse repeats every half turn, so past a quarter turn
+            // per ring the rotation aliases and the quads joining the rings draw a sawtooth — the
+            // high-speed zigzag, worst on the wide contrail tube. Where this ring's own spacing
+            // gets near that limit, its section eases to a round tube of the same area with no
+            // seam, which has nothing to alias. Slow passes keep the full twisting-rope look.
+            float seg = src > 0 ? (r.pts[src] - r.pts[src - 1]).magnitude
+                      : (n > 1 ? (r.pts[1] - r.pts[0]).magnitude : 0f);
+            float twistStep = ribbonTwistPerMetre * seg;
+            float shapeKeep = 1f - Mathf.SmoothStep(0f, 1f,
+                (twistStep - twistAliasStart) / Mathf.Max(twistAliasFull - twistAliasStart, 1e-3f));
+            float roundR = Mathf.Sqrt(ribbonAspect);          // equal-area circle, in major-axis units
+            float majorR = radius * Mathf.Lerp(roundR, 1f, shapeKeep);
+            float minorR = radius * Mathf.Lerp(roundR, ribbonAspect, shapeKeep);
+            float stripeAmt = ribbonStripe * shapeKeep;
+
             // cos/sin of the twist once, then rotate the precomputed unit circle into place.
             float tc = Mathf.Cos(twist), ts = Mathf.Sin(twist);
             for (int k = 0; k < K; k++)
@@ -3198,12 +3219,12 @@ public class WingtipVortex : MonoBehaviour
 
                 // Elliptical, not circular: scaling the two basis directions differently is what
                 // gives the section an orientation for the twist to actually show.
-                Vector3 off = prevN * (ca * radius) + binormal * (sa * radius * ribbonAspect);
+                Vector3 off = prevN * (ca * majorR) + binormal * (sa * minorR);
                 Vector3 w = centre + off - origin;
 
                 // Bright seam on one side of the ring; the twist carries it around, so the rope
                 // reads as winding even where the silhouette is ambiguous.
-                float stripe = 1f - ribbonStripe * (0.5f - 0.5f * ca);
+                float stripe = 1f - stripeAmt * (0.5f - 0.5f * ca);
 
                 int vi = i * K + k;
                 r.verts[vi] = w;

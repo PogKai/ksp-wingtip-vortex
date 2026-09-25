@@ -4,6 +4,60 @@ All notable changes to KSP Wingtip Vortex.
 
 ---
 
+## 1.4.0 — FAR
+
+Ferram Aerospace Research is now supported. Under FAR the vortices and the wing vapor read FAR's
+own per-wing forces, so both follow the angle of attack, stall and lift FAR actually flies the
+wing at. High-altitude contrails now spread wide and soft toward their end, and a sideways
+zigzag that showed on fast, hard-pulling jets is gone.
+
+### Added
+
+* **Ferram Aerospace Research support.** FAR replaces the stock lifting modules the mod used to
+  find wings by, so under FAR no vortex ever spawned and no vapor appeared. Wings are now found by
+  FAR's own modules as well (`FARWingAerodynamicModel`, `FARControllableSurface`), and each wing's
+  force is read from it by reflection: **FAR is still not a dependency**, and without it nothing
+  changes. Tested with FAR 0.16.2. Under FAR:
+  * **Vortex strength comes from the wings' lift only.** It used to read FAR's whole-vessel force,
+    fuselage body lift included, which set the vortices off at a lower wing loading than the same
+    craft under stock.
+  * **Wing vapor reads each wing's own lift and stall.** A stalled wing loses its leading-edge
+    suction peak, so vapor thins out past the stall instead of deepening.
+  * **The suction peak is capped where the flow over the wing goes supersonic** (local Mach 1.35,
+    where a shock separates the flow), a ceiling that falls with flight Mach. The stall ceiling used
+    under stock rises with Mach and let a 5 g pull at Mach 0.6 condense nearly all the water in the air.
+  * **Clipped wing panels are read at FAR's own lift coefficient.** FAR credits every clipped panel
+    with its full area, so the wing really flies at a modest angle of attack; reading the lift over
+    only the unshared chord made a heavily clipped wing fog in level flight.
+  * **The tail roll rule is off.** Stock needs it because it gives a small, fully deflected tail
+    surface far more lift than a real one, with no downwash from the wing; FAR models both, so a
+    FAR tail surface condenses from its own load.
+
+* **Contrails spread near their end.** A real high-altitude contrail stays a tight, sharp line
+  while the wake's vortex pair holds the ice in its cores, then widens fast and thins once the pair
+  breaks up. In the contrail band the last half of the trail now does the same, to about 3x its
+  width by the end, fading as it spreads. Low-altitude trails are unchanged.
+
+### Fixed
+
+* **Vortices zigzagged, seen from the side, on a fast jet in a hard pull.** KSP's springy part
+  joints let a wing built from many parts flex up and down by up to 2 m at the tip, and the wake
+  recorded every wobble. The wake now follows the wingtip on the rigid airframe (its offset from the
+  root part), so it keeps every real motion of the aircraft and none of the flexing. The end-of-flight
+  `session peaks` line reports how much flex was removed.
+* **The tube's twist aliased at jet speed.** A ring is laid each frame, so at 250 m/s they sit
+  4-8 m apart and the twisting cross-section turned up to two radians between neighbours, which
+  drew a sawtooth. Where the spacing gets near that limit the section now rounds off.
+* **The tube's inward curve followed the live load**, so any wobble in the load shifted
+  neighbouring rings inward by different amounts. It now follows the source's fixed strength.
+
+### Unchanged under stock
+
+Everything the FAR support changed in the wing vapor is chosen by whether FAR is running; with
+stock aerodynamics the vapor behaves exactly as in 1.3.0.
+
+---
+
 ## 1.3.0 — Wingmen
 
 Until now the mod drew one aircraft: the one you were flying. This release draws every aircraft in

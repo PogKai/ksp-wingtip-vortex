@@ -68,7 +68,9 @@ There is no laminar/turbulent switch, on purpose: across every flight case that 
 
 Each effect logs a one-shot line the first time it engages, and `[VORTEX] session peaks` summarises the flight when you leave it. The breakdown thresholds are literature values applied to an estimated swirl, so that line is what says whether they are in the right place.
 
-**FAR:** when Ferram Aerospace Research is running, the load factor is read from its own aerodynamic force (FARAPI, by reflection). FAR is still not a supported configuration: vortex placement detects the stock lifting modules FAR removes.
+**FAR:** Ferram Aerospace Research replaces the stock lifting modules, so wings are also found by FAR's own (`FARWingAerodynamicModel`, `FARControllableSurface`), and each wing's force is read from it by reflection, with no dependency on FAR. The load factor sums the wings' lift, as under stock, rather than FAR's whole-vessel force, which includes fuselage body lift. The wing vapor reads each wing's lift and stall; a stalled wing loses its leading-edge suction peak. Two vapor readings are FAR-only, because FAR flies the wing at a real angle of attack: the suction peak is also capped where the flow over the wing would reach local Mach 1.35, and clipped panels are read at their full chord (FAR's own lift coefficient) rather than their unshared share. Under stock both stay as in 1.3.0.
+
+**Rigid wake anchor:** the wake follows each wingtip's offset from the root part, captured when the vortex source is set up, not the tip part itself. KSP's part joints let a many-part wing flex by up to 2 m at the tip in a hard pull, and a wake that recorded it zigzagged. `session peaks` reports the flex removed as `tip flex peak`.
 
 ---
 

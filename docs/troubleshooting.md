@@ -14,7 +14,7 @@ Search `KSP.log` for `[VORTEX]`. The mod logs its full selection pass, including
 * Ensure the craft is airborne: vortices are suppressed on the ground by design
 * Check the measurement line: `[VORTEX] [<craft>] measured: span=... mass=... sizeFactor=...`. Every line is tagged with the craft it is about, since other aircraft log too. A wildly wrong span means a mod's renderer got past the bounds filter; the log will name it
 * On another aircraft: vortices are drawn for the ten nearest craft with lifting surfaces. Debris, EVA kerbals, flags and missiles never get them
-* Ferram Aerospace Research is not supported: it removes the stock lifting modules the mod detects
+* Under Ferram Aerospace Research, check the start of the flight for `[VORTEX] FAR detected`. `FAR not detected (or API mismatch)` with FAR installed means its wing modules have changed in a way this version does not read; please report it with your FAR version
 
 ## Nothing at altitude
 

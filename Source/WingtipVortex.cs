@@ -8,7 +8,7 @@ using System.Collections.Generic;
 // keeps drawing its own, and the one you take over already has one.
 public class WingtipVortex : MonoBehaviour
 {
-    public const string ModVersion = "1.3.0";
+    public const string ModVersion = "1.4.0";
 
     // The craft this controller draws. Set by the manager immediately after AddComponent, which
     // is before Start() runs.

@@ -34,10 +34,10 @@ For every lifting part, every physics step:
 
 * **Lower atmosphere only.** Air thinner than 10% of the body's sea-level density (about 14 km on Kerbin) has a hard cutoff: no vapor, and the wing-vapor code does no work at all, so orbit and space stations cost nothing
 * **A surface lifting against the aircraft's net lift makes no vapor**: a tailplane trimming the aircraft, a canard set against the wing. KSP loads these far harder than a real aircraft would, and they looked like artifacts. This is a style choice, not physics
-* **A roll control surface condenses only from the load it shares with its mirror twin**: a taileron, elevon or all-moving stabilator. A pure roll deflects the two halves equal and opposite, so neither fogs; a pull loads both alike, so both do. Stock gives a small, fully deflected surface far more lift than a real tail carries. Also a style choice
+* **Under stock, a roll control surface condenses only from the load it shares with its mirror twin**: a taileron, elevon or all-moving stabilator. A pure roll deflects the two halves equal and opposite, so neither fogs; a pull loads both alike, so both do. Stock gives a small, fully deflected surface far more lift than a real tail carries. Also a style choice
 * **KSP has no weather**, so the air's moisture is a stand-in: a fixed dew-point spread (12 K in the humid lowest layer, 18 K above it). It does not follow the time of day
 * Wing vapor is drawn on the craft you fly only (the vortices are drawn on every aircraft around you), as a particle effect: not volumetric, no shadows. When BDArmory's camera follows a fired missile, the vapor stays on the aircraft that fired it
-* Needs stock aerodynamics (`ModuleLiftingSurface`). Under Ferram Aerospace Research no vapor appears
+* Works under stock aerodynamics or Ferram Aerospace Research. Under FAR it reads each wing's own lift and stall, drops the roll rule above (FAR models the tail's downwash and realistic lift), caps the suction peak where the flow over the wing would go supersonic, and reads clipped panels at FAR's own lift coefficient. Under stock it behaves as in 1.3.0
 
 ## Performance
 

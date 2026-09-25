@@ -38,19 +38,19 @@ KSP 1.12.x · no dependencies · to upgrade, replace the folder · to remove, de
 
 <br>
 
-## New in 1.3.0
+## New in 1.4.0
 
-* **Vortices on every aircraft** around you, not just the one you fly. Switching craft no longer resets any wake
-* **Vortices form like real ones**: a thin, faint thread at the wingtip that builds up behind it, and a much gentler spiral breakdown
-* **BDArmory**: wing vapor stays on the jet when the camera follows a missile, and AI craft spawned in the air are measured correctly
+* **Ferram Aerospace Research support**: vortices and wing vapor read FAR's own per-wing lift and stall. Still no dependency, and stock behaves as before
+* **Contrails spread near their end** at altitude, wide and soft, like a real contrail once its vortices break up
+* **No more zigzag** on a fast jet in a hard pull: the wake follows the rigid airframe, not the flexing wingtip
 * Everything else in the [changelog](CHANGELOG.md)
 
 <br>
 
 ## Good to know
 
-* Needs **stock aerodynamics**. Works alongside Scatterer, EVE, Parallax, Deferred, Singularity and Kopernicus
-* Vortex placement and wing vapor need the stock lifting modules, so they don't appear under **Ferram Aerospace Research**
+* Works with **stock aerodynamics** or **Ferram Aerospace Research** (tested with FAR 0.16.2), detected automatically
+* Works alongside Scatterer, EVE, Parallax, Deferred, Singularity and Kopernicus
 
 <br>
 

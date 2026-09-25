@@ -138,11 +138,28 @@ namespace VortexVapor
         // all the water in the air (20 g/kg in a flight log). Slow flight keeps the stall cap.
         public static float MaxLocalMach = 1.35f;
 
-        // Deepest suction coefficient the section can carry at this flight Mach: the lower of the
-        // stall ceiling and the shock ceiling. Computed once per step.
-        public static float PeakCpCap(float mach)
+        // Deepest suction coefficient the section can carry at this flight Mach, computed once per
+        // step. Two tunings, picked by which aero model is flying the craft:
+        //
+        //   Stock: the stall ceiling alone, scaled by Prandtl-Glauert, as through 1.3.0. Stock's
+        //   lift is not tied to a real angle of attack, and the vapor onset under stock was tuned
+        //   in flight against this cap; the shock cap on top of it made stock vapor very hard to get.
+        //
+        //   FAR: the lower of that and the shock ceiling below. FAR flies the wing at a real angle
+        //   of attack and loads it to real lift coefficients, so the physical limit applies.
+        public static float PeakCpCap(float mach, bool far)
         {
-            float stallCap = MaxPeakCp * PrandtlGlauert(mach);
+            return far ? PeakCpCapFAR(mach) : PeakCpCapStock(mach);
+        }
+
+        public static float PeakCpCapStock(float mach)
+        {
+            return MaxPeakCp * PrandtlGlauert(mach);
+        }
+
+        public static float PeakCpCapFAR(float mach)
+        {
+            float stallCap = PeakCpCapStock(mach);
             if (mach < 0.05f) return stallCap;
             float m2 = mach * mach;
             float ratio = Mathf.Pow((1f + 0.2f * m2) / (1f + 0.2f * MaxLocalMach * MaxLocalMach), 3.5f);
@@ -154,7 +171,7 @@ namespace VortexVapor
 
         public static float Suction(float x, float loading, float q, float mach)
         {
-            return Suction(CamberShape(x), PeakShape(x), loading, 0f, q, PrandtlGlauert(mach), PeakCpCap(mach));
+            return Suction(CamberShape(x), PeakShape(x), loading, 0f, q, PrandtlGlauert(mach), PeakCpCapStock(mach));
         }
 
         // With part of the loading carried by a deflected flap, aileron or elevator behind the

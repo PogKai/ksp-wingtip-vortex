@@ -79,6 +79,26 @@ namespace VortexVapor
         static readonly CondensationTable table = new CondensationTable();
         static int[] gammaStart = new int[0], gammaCount = new int[0];
         static float[] gammaOf = new float[0], chordOf = new float[0];
+
+        // The chord a panel's circulation is spread over when its section's loading is formed,
+        // for a panel sharing `share` of its planform with no other lifting part. Two tunings,
+        // picked by which aero model is flying the craft:
+        //
+        //   Stock: the unshared share of the chord, as through 1.3.0, so a clipped stack carries
+        //   its lift over the one real chord. The stock vapor onset was tuned in flight with it.
+        //
+        //   FAR: the panel's FULL chord. FAR credits a clipped panel with its whole area and flies
+        //   the wing at the angle of attack that gives, and the suction peak follows that angle.
+        //   Each panel's circulation is already scaled back to its full lift, so a stack of k
+        //   copies sums to k*Gamma over k*c: each panel's own lift coefficient. The share chord
+        //   instead squeezed a clipped wing's lift onto a third of its chord (CL 2+ in level
+        //   flight on a Su-33 whose panels own 30-60% of their outline) and fogged it at 1 g.
+        //
+        // Unclipped panels have share 1 and read the same either way; the wake never uses this.
+        static float SectionChord(float chord, float share, bool far)
+        {
+            return far ? chord : chord * Mathf.Clamp01(share);
+        }
         static readonly float[] stripGamma = new float[Strips], stripFlap = new float[Strips], stripChordSum = new float[Strips];
         static readonly bool[] stripQuiet = new bool[Strips], stripDead = new bool[Strips];
         static readonly float[] stripCamberTerm = new float[Strips], stripAlphaTerm = new float[Strips], stripSideOf = new float[Strips];
@@ -114,7 +134,10 @@ namespace VortexVapor
             table.Build(kelvin, pascal, humidity);
             float q = 0.5f * rho * speed * speed;
             float pg = Condensation.PrandtlGlauert(mach);
-            float cpCap = Condensation.PeakCpCap(mach);
+            // Stock and FAR are read differently in two places (the suction ceiling, and the chord a
+            // section's loading is spread over): see Condensation.PeakCpCap and SectionChord.
+            bool far = AeroState.FarAvailable;
+            float cpCap = Condensation.PeakCpCap(mach, far);
             float covered = 0f, total = 0f, peak = 0f;
             Vector3 netLift = Vector3.zero;
             foreach (var sf in surfaces) netLift += sf.lift;
@@ -153,16 +176,7 @@ namespace VortexVapor
                     float g, c, share;
                     TrailedVorticity.PanelLoading(si, k, out g, out c, out share);
                     gammaOf[gammaStart[si] + k] = g * vaporShare;
-                    // The panel's FULL chord, not its unshared share. The aero model (stock or FAR)
-                    // credits a clipped panel with its whole area and flies the wing at the angle
-                    // of attack that gives, and the suction peak follows that angle. Each panel's
-                    // circulation is already scaled back to its full lift, so a stack of k copies
-                    // sums to k*Gamma over k*c: each panel's own lift coefficient. Dividing by the
-                    // shared chord instead squeezed a clipped wing's whole lift onto a third of its
-                    // chord (CL 2+ in level flight on a Su-33 whose panels own 30-60% of their
-                    // outline), which pinned the peak at its ceiling and fogged the wing at 1 g.
-                    // Unclipped panels have share 1, so they are unchanged; the wake never used this.
-                    chordOf[gammaStart[si] + k] = c;
+                    chordOf[gammaStart[si] + k] = SectionChord(c, share, far);
                 }
             }
 

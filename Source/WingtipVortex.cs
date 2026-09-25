@@ -70,6 +70,36 @@ public class WingtipVortex : MonoBehaviour
     private List<LineRenderer> lines = new List<LineRenderer>();
     private List<GameObject> trailObjs = new List<GameObject>();
     private List<Transform> anchors = new List<Transform>();
+
+    // RIGID ANCHORS. KSP joins parts with springy joints, and under a hard pull at high dynamic
+    // pressure a wing built from dozens of parts wobbles up and down at a few Hz, metres at the
+    // tip on a large craft. Read straight off the part, that put the rope's head on a vertical
+    // wave ~50 m long at jet speed: too long for the ring smoothing to remove, so it drew a
+    // zigzag seen from the side and invisible from above. A real vortex core does not record a
+    // wing's flutter, and KSP's joint wobble is far larger than real wing bending anyway.
+    //
+    // So each anchor's offset is captured in the ROOT PART's frame when the source is made, and
+    // the wake follows that point on the rigid airframe: every real motion of the aircraft
+    // (pitch, roll, the flight path itself) and none of the flexing. Falls back to the part's own
+    // position if the root has changed or the two disagree by more than a part flexes (a part
+    // shot off, or a stale capture), so a bad capture can never displace a wake.
+    private List<Part> anchorRoots = new List<Part>();
+    private List<Vector3> anchorRootOffsets = new List<Vector3>();
+    private bool rigidAnchors = true;
+    private float rigidAnchorMaxFlexSpans = 0.25f;   // beyond this the capture is not trusted
+    private float peakTipFlex = 0f;                  // metres, reported with the session peaks
+
+    Vector3 AnchorPosition(int i)
+    {
+        Transform anchor = anchors[i];
+        Part root = anchorRoots[i];
+        if (!rigidAnchors || root == null || root.vessel != vessel) return anchor.position;
+        Vector3 rigid = root.transform.TransformPoint(anchorRootOffsets[i]);
+        float flex = (anchor.position - rigid).magnitude;
+        if (flex > rigidAnchorMaxFlexSpans * Mathf.Max(vesselSpan, 1f)) return anchor.position;
+        if (flex > peakTipFlex) peakTipFlex = flex;
+        return rigid;
+    }
     private List<float> strengths = new List<float>();
     // Each source's lateral reach as a fraction of the main wing's. Drives how much load a
     // secondary surface must carry before its vortex shows — see the gate in Update().
@@ -1433,6 +1463,7 @@ public class WingtipVortex : MonoBehaviour
             if (anchors[i] != null) Destroy(anchors[i].gameObject);
 
         ribbons.Clear(); trailObjs.Clear(); anchors.Clear();
+        anchorRoots.Clear(); anchorRootOffsets.Clear();
         trails.Clear(); lines.Clear();
         strengths.Clear(); spanRatios.Clear();
         lineHistory.Clear();
@@ -1451,7 +1482,8 @@ public class WingtipVortex : MonoBehaviour
         {
             Log($"session peaks: swirl={peakSwirl:F2} at V={peakSwirlSpeed:F0}m/s "
                       + $"Gamma={peakSwirlGamma:F0}m2/s (breakdown onset {breakdownSwirlOnset:F2}, "
-                      + $"bubble from {bubbleSwirlMin:F2}) | ground factor={peakGroundFac:F2}");
+                      + $"bubble from {bubbleSwirlMin:F2}) | ground factor={peakGroundFac:F2} "
+                      + $"| tip flex peak={peakTipFlex:F2}m (removed from the wake)");
         }
 
         // The vortex objects are deliberately unparented so recorded trail geometry stays in world
@@ -2747,6 +2779,9 @@ public class WingtipVortex : MonoBehaviour
 
         trailObjs.Add(obj); trails.Add(tr); lines.Add(lr);
         anchors.Add(anchor); strengths.Add(strength); spanRatios.Add(Mathf.Clamp01(spanRatio));
+        Part rootPart = vessel != null ? vessel.rootPart : null;
+        anchorRoots.Add(rootPart);
+        anchorRootOffsets.Add(rootPart != null ? rootPart.transform.InverseTransformPoint(anchor.position) : Vector3.zero);
         lineHistory.Add(new Queue<Vector3>());
         trailWasActive.Add(false); lineWasActive.Add(false);
         lastFlows.Add(Vector3.zero); lastAnchorPositions.Add(anchor.position);
@@ -4076,7 +4111,7 @@ public class WingtipVortex : MonoBehaviour
             // trail so each stretch of it renders at the strength it was actually born with.
             shedHistory[i][shedWrite] = visible;
 
-            Vector3 anchorPos = anchor.position;
+            Vector3 anchorPos = AnchorPosition(i);
 
             // DISCONTINUITY GUARD — the distance-based replacement for the old frame-time test.
             // Origin shifts are already compensated in OnFloatingOriginShift, so anything left

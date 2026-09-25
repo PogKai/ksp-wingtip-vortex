@@ -114,6 +114,7 @@ namespace VortexVapor
             table.Build(kelvin, pascal, humidity);
             float q = 0.5f * rho * speed * speed;
             float pg = Condensation.PrandtlGlauert(mach);
+            float cpCap = Condensation.PeakCpCap(mach);
             float covered = 0f, total = 0f, peak = 0f;
             Vector3 netLift = Vector3.zero;
             foreach (var sf in surfaces) netLift += sf.lift;
@@ -262,7 +263,7 @@ namespace VortexVapor
                         // is quiet and its samples only need to fade out. Almost every strip of
                         // every part is quiet almost all the time.
                         float bound = stripDead[b] ? 0f
-                            : Condensation.SuctionFromTerms(Mathf.Max(ct, 0f), at, f.stripCamberMax[b], Condensation.PeakAdjust(f.stripPeakMax[b], pg), q, pg);
+                            : Condensation.SuctionFromTerms(Mathf.Max(ct, 0f), at, f.stripCamberMax[b], Condensation.PeakAdjust(f.stripPeakMax[b], pg), q, cpCap);
                         stripQuiet[b] = table.Density(bound) <= 0f;
                         if (!stripQuiet[b]) allQuiet = false;
                     }
@@ -287,7 +288,7 @@ namespace VortexVapor
                         if (!stripDead[b] && (f.buried[j] & stripBit[b]) == 0)
                         {
                             float suction = Condensation.SuctionFromTerms(stripCamberTerm[b], stripAlphaTerm[b], f.camberShape[j],
-                                                                 Condensation.PeakAdjust(f.peakShape[j], pg), q, pg);
+                                                                 Condensation.PeakAdjust(f.peakShape[j], pg), q, cpCap);
                             if (suction > maxSuction) maxSuction = suction;
                             target = table.Density(suction);
                         }

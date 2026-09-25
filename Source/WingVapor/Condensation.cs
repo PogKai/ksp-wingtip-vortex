@@ -127,12 +127,34 @@ namespace VortexVapor
         // suction peak. Real airfoils reach Cp_min of about -3 to -6 at maximum lift; the
         // incompressible limit is scaled by Prandtl-Glauert like the rest of the peak.
         public static float MaxPeakCp = 3.5f;
+        // The second ceiling, and the one that binds at speed. The air over the suction peak
+        // speeds up as the pressure falls, and past a local Mach of about 1.3-1.4 it ends in a
+        // shock strong enough to separate the boundary layer, which collapses the peak. So the
+        // deepest suction is the isentropic pressure drop from flight Mach to that local Mach:
+        //   Cp_max = (1 - ((1 + 0.2 M^2) / (1 + 0.2 Ml^2))^3.5) / (0.7 M^2)
+        // It FALLS with Mach (5.8 at M 0.4, 3.4 at M 0.5, 2.3 at M 0.6), where the stall cap
+        // scaled by Prandtl-Glauert rises (3.8, 4.0, 4.4). Using only that one let a 5 g pull at
+        // M 0.6 reach a pressure drop larger than the whole ambient pressure and condense nearly
+        // all the water in the air (20 g/kg in a flight log). Slow flight keeps the stall cap.
+        public static float MaxLocalMach = 1.35f;
+
+        // Deepest suction coefficient the section can carry at this flight Mach: the lower of the
+        // stall ceiling and the shock ceiling. Computed once per step.
+        public static float PeakCpCap(float mach)
+        {
+            float stallCap = MaxPeakCp * PrandtlGlauert(mach);
+            if (mach < 0.05f) return stallCap;
+            float m2 = mach * mach;
+            float ratio = Mathf.Pow((1f + 0.2f * m2) / (1f + 0.2f * MaxLocalMach * MaxLocalMach), 3.5f);
+            float shockCap = (1f - ratio) / (0.7f * m2);
+            return Mathf.Max(0f, Mathf.Min(stallCap, shockCap));
+        }
         const float NoseOffset = 0.05f;
         static float peakMean = -1f;
 
         public static float Suction(float x, float loading, float q, float mach)
         {
-            return Suction(CamberShape(x), PeakShape(x), loading, 0f, q, PrandtlGlauert(mach));
+            return Suction(CamberShape(x), PeakShape(x), loading, 0f, q, PrandtlGlauert(mach), PeakCpCap(mach));
         }
 
         // With part of the loading carried by a deflected flap, aileron or elevator behind the
@@ -142,13 +164,13 @@ namespace VortexVapor
         // surface loads its section without sharpening the peak where vapor forms first.
         // Loadings are signed toward the suction side of the whole section; `flapLoading` may be
         // negative (a flap working against the section).
-        public static float Suction(float camberShape, float peakShape, float leadLoading, float flapLoading, float q, float pg)
+        public static float Suction(float camberShape, float peakShape, float leadLoading, float flapLoading, float q, float pg, float cpCap)
         {
             float cl = leadLoading / Mathf.Max(q, 1f), clFlap = flapLoading / Mathf.Max(q, 1f);
             float camber = Mathf.Clamp(cl, 0f, IdealCL), alpha = Mathf.Max(0f, cl - IdealCL);
             float peak = Mathf.Max(0f, 1f + (peakShape - 1f) * pg);
             float cp = Mathf.Max(0f, SuctionShare * ((camber + clFlap) * camberShape + alpha * peak));
-            return q * Mathf.Min(cp, MaxPeakCp * pg);
+            return q * Mathf.Min(cp, cpCap);
         }
 
         // The per-point shapes depend only on geometry, so they are computed once per part and
@@ -170,10 +192,10 @@ namespace VortexVapor
             return Mathf.Max(0f, 1f + (peakShape - 1f) * pg);
         }
 
-        public static float SuctionFromTerms(float camberTerm, float alphaTerm, float camberShape, float peakAdjust, float q, float pg)
+        public static float SuctionFromTerms(float camberTerm, float alphaTerm, float camberShape, float peakAdjust, float q, float cpCap)
         {
             float cp = camberTerm * camberShape + alphaTerm * peakAdjust;
-            return cp <= 0f ? 0f : q * Mathf.Min(cp, MaxPeakCp * pg);
+            return cp <= 0f ? 0f : q * Mathf.Min(cp, cpCap);
         }
 
         public static float CamberShape(float x)

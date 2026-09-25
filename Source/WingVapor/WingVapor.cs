@@ -153,7 +153,16 @@ namespace VortexVapor
                     float g, c, share;
                     TrailedVorticity.PanelLoading(si, k, out g, out c, out share);
                     gammaOf[gammaStart[si] + k] = g * vaporShare;
-                    chordOf[gammaStart[si] + k] = c * Mathf.Clamp01(share);
+                    // The panel's FULL chord, not its unshared share. The aero model (stock or FAR)
+                    // credits a clipped panel with its whole area and flies the wing at the angle
+                    // of attack that gives, and the suction peak follows that angle. Each panel's
+                    // circulation is already scaled back to its full lift, so a stack of k copies
+                    // sums to k*Gamma over k*c: each panel's own lift coefficient. Dividing by the
+                    // shared chord instead squeezed a clipped wing's whole lift onto a third of its
+                    // chord (CL 2+ in level flight on a Su-33 whose panels own 30-60% of their
+                    // outline), which pinned the peak at its ceiling and fogged the wing at 1 g.
+                    // Unclipped panels have share 1, so they are unchanged; the wake never used this.
+                    chordOf[gammaStart[si] + k] = c;
                 }
             }
 
@@ -234,8 +243,8 @@ namespace VortexVapor
                             else leadStall = Mathf.Max(leadStall, surfaces[mi].stall);
                             chord += chordOf[gammaStart[mi] + idx];
                         }
-                        // The section's loading over the members' own panel chords (each counted
-                        // by its share), not the length of the flow line through the point: a
+                        // The section's loading over the members' own full panel chords (not
+                        // their unshared share, see chordOf), not the length of the flow line through the point: a
                         // panel's circulation belongs to its whole width, and near a pointed or
                         // slanted edge the local line shrinks to nothing while the circulation does
                         // not (v0.4.4: fog at 0.7 g from a few points at the corners of the A300's

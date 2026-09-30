@@ -2820,7 +2820,8 @@ public class WingtipVortex : MonoBehaviour
         public float[] odo;
         public float odometer;
 
-        // Inward direction, world space, frozen when the ring was laid.
+        // Inward direction, world space, set when the ring was laid (see RibbonInward), smoothed
+        // with the points while the ring is inside the smoothing window, then never touched.
         public Vector3[] inDir;
 
         // Ground-effect drift velocity and ground factor, frozen at birth for the same reason as
@@ -2833,6 +2834,11 @@ public class WingtipVortex : MonoBehaviour
         public float[] bdT;
         public float[] bdDepth;
         public float[] bdMode;
+
+        // Spiral-breakdown phase, accumulated ring to ring at the wavelength in force when each
+        // ring was laid, and frozen at birth. See SpiralLambda.
+        public float[] sPhase;
+        public float spiralPhase;
 
         public float spacing;   // current ring spacing, metres
 
@@ -2877,6 +2883,7 @@ public class WingtipVortex : MonoBehaviour
         r.bdT = new float[rings];
         r.bdDepth = new float[rings];
         r.bdMode = new float[rings];
+        r.sPhase = new float[rings];
         r.spacing = ribbonMinPointDist;
         r.odometer = 0f;
         r.count = 0;
@@ -2931,14 +2938,74 @@ public class WingtipVortex : MonoBehaviour
         return 1f + depth * ((Mathf.PerlinNoise(r.odometer * ribbonFlowScale, r.seed) - 0.5f) * 2f);
     }
 
-    void PushRibbonPoint(WakeRibbon r, Vector3 p, float now, float shed, float flowDepth)
+    // Toward the ROLL AXIS, from the anchor.
+    //
+    // This used to pick between +lateral and -lateral on the sign of the ring's lateral
+    // offset, and that is the zig-zag. On a cruciform tail two of the four fins sit at
+    // lateral offset ~0 by construction, so `side` hovers on the sign boundary and ordinary
+    // airframe wobble flips it from ring to ring. Consecutive rings then get inward
+    // directions pointing OPPOSITE ways, and because the displacement is scaled by `ease`,
+    // which grows with distance from the head, the alternation opens into a sawtooth that
+    // widens down the wake — exactly the shape in the report, and exactly why it settles
+    // down when the craft stops manoeuvring and the wobble stops crossing zero.
+    //
+    // The real quantity was never "which side of the centreline", it was "which way is the
+    // axis from here". Projecting out the roll-axis component gives that directly: no sign
+    // test, no boundary to sit on, and correct for a fin pointing straight up, where toward
+    // the centreline means DOWN and neither lateral direction was ever right.
+    //
+    // Unchanged for a wing — at a wingtip the radial-outward direction is lateral plus a
+    // little dihedral, so inward still points essentially along the span toward the root.
+    //
+    // Measured at the ANCHOR, once per frame, and never at a ring laid behind it. The rings a
+    // frame lays are spread back along the flight path to where the last frame's head now sits,
+    // V * frame time behind the tip: 6-12 m at 292 m/s. The flight path is not the roll axis,
+    // it is angle of attack below it, so projecting out the roll axis at a point d metres back
+    // leaves d * sin(AoA) of the flight path in the "radial" direction. Every frame's rings
+    // were therefore tipped toward the belly by an amount that ramped from most at its first
+    // ring to nothing at the tip, then jumped back at the next frame's: a sawtooth of up to
+    // 0.4 m on a 12 m span at 15-20 degrees AoA and 30-45 fps, as large as the tube itself,
+    // one tooth per frame. Seen from the side and gone from above. It grows with airspeed times
+    // sin(AoA), and holding 7+ g takes a high AoA at any speed, so every hard pull drew it, and
+    // the ring smoothing never touched it: that only ever acted on the points. The anchor is a
+    // fixed point on the rigid airframe, so this direction only turns as the airframe does;
+    // Update() hands the rings in between a slerp from the last head's direction to this.
+    Vector3 RibbonInward(WakeRibbon r, Vector3 anchorPos)
+    {
+        Vector3 rel = anchorPos - vesselTransform.position;
+        Vector3 radialOut = rel - axLength * Vector3.Dot(rel, axLength);
+        if (radialOut.sqrMagnitude > 1e-6f) return -radialOut.normalized;
+        return (r.count > 0) ? r.inDir[0] : -axLateral;   // degenerate: hold the last
+    }
+
+    // Spiral-breakdown wavelength for a given ring spacing: a turn shorter than
+    // spiralMinRingsPerTurn rings cannot be drawn by this mesh and would alias rather than read
+    // as small, so ring spacing floors it.
+    float SpiralLambda(float spacing)
+    {
+        return Mathf.Max(spiralWavelengthCores * frameR0Vis, spiralMinRingsPerTurn * Mathf.Max(spacing, 0.1f));
+    }
+
+    void PushRibbonPoint(WakeRibbon r, Vector3 p, float now, float shed, float flowDepth, Vector3 inward)
     {
         if (r.count > 0)
         {
             r.shed[0] = shed * RibbonFlowVar(r, flowDepth);   // keep the head's strength live
             if ((p - r.pts[0]).sqrMagnitude < 0.0625f) return;   // 0.25 m, anti-bunching only
         }
-        if (r.count > 0) r.odometer += (p - r.pts[0]).magnitude;
+        if (r.count > 0)
+        {
+            float step = (p - r.pts[0]).magnitude;
+            r.odometer += step;
+            // The spiral's phase advances by this step at the wavelength in force NOW, and is
+            // stored rather than derived later as odo / lambda. Lambda is floored by ring
+            // spacing, which follows speed and the wake lifetime and so moves a little every
+            // frame; odo is the whole flight's distance, so phase = odo / lambda with the
+            // current lambda moved by hundreds of radians per frame for a 1% change, and every
+            // spiral already laid re-wound at random each frame at jet speed.
+            r.spiralPhase = Mathf.Repeat(r.spiralPhase + step * (Mathf.PI * 2f) / SpiralLambda(r.spacing),
+                                         Mathf.PI * 2f);
+        }
 
         int n = Mathf.Min(r.count, r.pts.Length - 1);
         System.Array.Copy(r.pts, 0, r.pts, 1, n);
@@ -2951,31 +3018,9 @@ public class WingtipVortex : MonoBehaviour
         System.Array.Copy(r.bdT, 0, r.bdT, 1, n);
         System.Array.Copy(r.bdDepth, 0, r.bdDepth, 1, n);
         System.Array.Copy(r.bdMode, 0, r.bdMode, 1, n);
+        System.Array.Copy(r.sPhase, 0, r.sPhase, 1, n);
 
-        // Toward the ROLL AXIS, decided now and never revisited.
-        //
-        // This used to pick between +lateral and -lateral on the sign of the ring's lateral
-        // offset, and that is the zig-zag. On a cruciform tail two of the four fins sit at
-        // lateral offset ~0 by construction, so `side` hovers on the sign boundary and ordinary
-        // airframe wobble flips it from ring to ring. Consecutive rings then get inward
-        // directions pointing OPPOSITE ways, and because the displacement is scaled by `ease`,
-        // which grows with distance from the head, the alternation opens into a sawtooth that
-        // widens down the wake — exactly the shape in the report, and exactly why it settles
-        // down when the craft stops manoeuvring and the wobble stops crossing zero.
-        //
-        // The real quantity was never "which side of the centreline", it was "which way is the
-        // axis from here". Projecting out the roll-axis component gives that directly: no sign
-        // test, no boundary to sit on, and correct for a fin pointing straight up, where toward
-        // the centreline means DOWN and neither lateral direction was ever right.
-        //
-        // Unchanged for a wing — at a wingtip the radial-outward direction is lateral plus a
-        // little dihedral, so inward still points essentially along the span toward the root.
-        Vector3 rel = p - vesselTransform.position;
-        Vector3 radialOut = rel - axLength * Vector3.Dot(rel, axLength);
-        if (radialOut.sqrMagnitude > 1e-6f)
-            r.inDir[0] = -radialOut.normalized;
-        else
-            r.inDir[0] = (r.count > 0) ? r.inDir[1] : -axLateral;   // degenerate: hold the last
+        r.inDir[0] = inward;   // see RibbonInward
 
         // GROUND EFFECT for this ring. Height is the vessel's own height above the ground plus
         // this point's offset from it along local up, which assumes the ground under the wingtip
@@ -3001,6 +3046,7 @@ public class WingtipVortex : MonoBehaviour
         }
 
         r.bdT[0] = frameBreakT; r.bdDepth[0] = frameBreakDepth; r.bdMode[0] = frameBreakMode;
+        r.sPhase[0] = r.spiralPhase;
 
         r.pts[0] = p; r.birth[0] = now; r.shed[0] = shed * RibbonFlowVar(r, flowDepth); r.odo[0] = r.odometer;
         r.count = Mathf.Min(r.count + 1, r.pts.Length);
@@ -3058,7 +3104,8 @@ public class WingtipVortex : MonoBehaviour
         float spacingNow = Mathf.Max(r.spacing, 0.1f);
         float bubbleWidthT = Mathf.Max(bubbleLengthCores * frameR0Vis, bubbleMinRings * spacingNow)
                              / Mathf.Max(frameSpeed, 1f);
-        float spiralLambda = Mathf.Max(spiralWavelengthCores * frameR0Vis, spiralMinRingsPerTurn * spacingNow);
+        // Sets only how fast the spiral decays; its phase was fixed at birth (see r.sPhase).
+        float spiralLambda = SpiralLambda(spacingNow);
         float groundCap = groundSpreadMaxSpans * vesselSpan;
 
         // Parallel transport. A naive Cross(tangent, up) frame flips violently wherever the
@@ -3175,9 +3222,10 @@ public class WingtipVortex : MonoBehaviour
             if (!live) radius = 0f;
 
             // Bend toward the centreline, easing in over ribbonInwardGrow and then holding, so
-            // the rope converges a little and afterwards runs parallel. Direction was frozen at
-            // birth; only the magnitude eases, and it saturates within the first few metres, so
-            // nothing already shed can be re-aimed by later manoeuvring.
+            // the rope converges a little and afterwards runs parallel. Direction was set at birth
+            // and settles once the ring leaves the smoothing window; only the magnitude eases, and
+            // it saturates within the first few metres, so nothing already shed can be re-aimed
+            // by later manoeuvring.
             float ease = Mathf.Clamp01(arc / Mathf.Max(ribbonInwardGrow, 0.01f));
             ease = ease * ease * (3f - 2f * ease);
             // Scaled by the SOURCE's strength, not by this ring's shed. Shed is the live load at
@@ -3212,7 +3260,7 @@ public class WingtipVortex : MonoBehaviour
                 float sDecayT = spiralDecayTurns * spiralLambda / Mathf.Max(frameSpeed, 1f);
                 float sAmp = spiralAmpCores * frameR0Vis * bdSize * (1f - bdBubble) * bdOnset
                              * Mathf.Exp(-bdP / Mathf.Max(sDecayT, 0.01f));
-                float sPhase = (r.odo[src] / spiralLambda) * Mathf.PI * 2f + spiralPrecession * age + r.seed;
+                float sPhase = r.sPhase[src] + spiralPrecession * age + r.seed;
                 centre += (sN * Mathf.Cos(sPhase) + sB * Mathf.Sin(sPhase)) * sAmp;
             }
 
@@ -4270,25 +4318,41 @@ public class WingtipVortex : MonoBehaviour
                 rb.spacing = spacing;
                 if (ribbonLive)
                 {
-                    if (rb.count == 0) PushRibbonPoint(rb, anchorPos, now, visible, flowDepth);
+                    // One inward direction per frame, at the anchor; the rings in between get a
+                    // slerp from the last head's. See RibbonInward.
+                    Vector3 headIn = RibbonInward(rb, anchorPos);
+                    if (rb.count == 0) PushRibbonPoint(rb, anchorPos, now, visible, flowDepth, headIn);
                     else
                     {
                         Vector3 last = rb.pts[0];
+                        Vector3 lastIn = rb.inDir[0];
                         float gap = Vector3.Distance(anchorPos, last);
                         int steps = Mathf.Clamp(Mathf.CeilToInt(gap / spacing), 1, 8);
                         for (int sub = 1; sub <= steps; sub++)
-                            PushRibbonPoint(rb, Vector3.Lerp(last, anchorPos, (float)sub / steps), now, visible, flowDepth);
+                        {
+                            float u = (float)sub / steps;
+                            PushRibbonPoint(rb, Vector3.Lerp(last, anchorPos, u), now, visible, flowDepth,
+                                            Vector3.Slerp(lastIn, headIn, u));
+                        }
                     }
                 }
                 // See ribbonSmoothWindow. Translation-invariant, so it commutes with
-                // OnFloatingOriginShift and needs no special handling there.
+                // OnFloatingOriginShift and needs no special handling there. The inward direction
+                // gets the same pass: it is the second channel into the drawn centreline, and
+                // smoothing only the points left any ring-to-ring noise in it drawn as is.
                 if (ribbonSmoothAmount > 0f && rb.count >= 3)
                 {
                     int w = Mathf.Min(ribbonSmoothWindow, rb.count - 2);
                     for (int j = 1; j <= w; j++)
+                    {
                         rb.pts[j] = Vector3.Lerp(rb.pts[j],
                                                  (rb.pts[j - 1] + rb.pts[j + 1]) * 0.5f,
                                                  ribbonSmoothAmount);
+                        Vector3 d = Vector3.Lerp(rb.inDir[j],
+                                                 (rb.inDir[j - 1] + rb.inDir[j + 1]) * 0.5f,
+                                                 ribbonSmoothAmount);
+                        if (d.sqrMagnitude > 1e-6f) rb.inDir[j] = d.normalized;
+                    }
                 }
 
                 BuildRibbonMesh(rb, now, rScale * Mathf.Lerp(1f, contrailWidthScale, contrailBlend), contrailBlend, life,

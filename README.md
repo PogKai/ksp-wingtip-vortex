@@ -55,6 +55,16 @@ KSP 1.12.x · no dependencies · to upgrade, replace the folder · to remove, de
 
 <br>
 
+## Altitude limits
+
+Both effects are limited by air density, not height, so the limits fall at a different altitude on every body. Kerbin figures are approximate.
+
+* **Vortices** are drawn at full strength down to the ground and in every part of the atmosphere with air density of 0.10 kg/m³ or more (roughly 15 km on Kerbin). Above that they fade out, and are gone entirely at 0.01 kg/m³ (roughly 25 km), so nothing is drawn in orbit
+* **Wing vapor** only forms in the lower atmosphere: below 10% of the body's sea-level air density (about 14 km on Kerbin). Above that there is a hard cutoff, with no vapor and no cost. It also needs a real pull in humid low air
+* **High-altitude contrails** need cold air, so on each body they appear only inside the band of temperatures it actually has (see the `[VORTEX] contrail band on <body>` line in `KSP.log`)
+
+<br>
+
 ## Good to know
 
 * Works with **stock aerodynamics** or **Ferram Aerospace Research** (tested with FAR 0.16.2), detected automatically

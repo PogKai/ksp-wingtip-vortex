@@ -33,6 +33,8 @@ namespace VortexVapor
         public const float PastTrailingEdge = 0.3f;
         // Peak opacity of one puff in fully dense vapor. Many overlap, so this stays low.
         public const float PuffAlpha = 0.28f;
+        // A puff's size over its life, as a multiple of its start size.
+        public const float SizeStart = 0.7f, SizeEnd = 1.5f;
 
         class Source
         {
@@ -88,7 +90,10 @@ namespace VortexVapor
                 float sum = 0f;
                 for (int j = 0; j < pf.samples.Length; j++)
                 {
-                    sum += f.density[j] * pf.sampleShare[j];
+                    // Square root: where the vapor is thin it still gets puffs (faint ones, see
+                    // PuffAlpha below), so the sheet spreads over the wing instead of crowding
+                    // the few densest samples.
+                    sum += Mathf.Sqrt(f.density[j]) * pf.sampleShare[j];
                     src.weights[j] = sum;
                 }
                 if (sum <= 0f) { src.carry = 0f; continue; }
@@ -117,30 +122,38 @@ namespace VortexVapor
 
                 PlaneFrame fr = src.box.Frame();
                 float cell = Mathf.Sqrt(areaEach);
-                float lift = 0.5f * pf.thickness + 0.05f;
                 for (int k = 0; k < count; k++)
                 {
-                    int j = Pick(src.weights, Random.value * src.sum);
+                    // One pick per equal slice of the part's vapor, not independent draws: the
+                    // sheet then covers the wing evenly instead of clumping and leaving gaps.
+                    int j = Pick(src.weights, (k + Random.value) / count * src.sum);
                     Vector2 q = pf.samples[j] + new Vector2(Random.Range(-0.5f, 0.5f), Random.Range(-0.5f, 0.5f)) * cell;
                     float side = f.sampleSide[j];
-                    Vector3 world = fr.ToWorld(q) + fr.n * (side * lift);
                     float life = Random.Range(MinLife, MaxLife);
                     float drift = f.sectionChord[j] * (1f - f.chordFrac[j] + PastTrailingEdge);
-                    Vector3 vel = down * (drift / life) + fr.n * (side * Random.Range(0f, 0.6f));
-                    Color c = tint;
                     // Thin vapor is faint and fine-grained, not a few opaque blobs: opacity and size
                     // both grow with density, so the first trace of condensation reads as a haze
                     // along the leading edge and thickens smoothly (v0.4.5: isolated puffs on the
                     // A300's tail at onset looked like artifacts).
                     float d = f.density[j];
+                    Color c = tint;
                     c.a = PuffAlpha * Mathf.Lerp(0.08f, 1f, d);
                     float grain = Mathf.Lerp(0.45f, 1f, d);
+                    float size = Mathf.Clamp(cell * Random.Range(1.6f, 2.6f) * sizeBoost * grain, 0.15f, 3f * sizeBoost);
+                    // Vapor forms on the suction (upper) surface only. A puff is a disc as wide as
+                    // 3 m centred on its position, so centred on the skin it would hang half below
+                    // the wing. Instead it starts resting on the skin (centre one start-radius up)
+                    // and rises at exactly the rate its radius grows (SizeStart..SizeEnd), so its
+                    // lower edge stays on the surface for its whole life.
+                    float rise = 0.5f * size * (SizeEnd - SizeStart) / life;
+                    Vector3 world = fr.ToWorld(q) + fr.n * (side * (0.5f * pf.thickness + 0.5f * size * SizeStart));
+                    Vector3 vel = down * (drift / life) + fr.n * (side * rise);
                     var ep = new ParticleSystem.EmitParams
                     {
                         position = local.InverseTransformPoint(world),
                         velocity = local.InverseTransformDirection(vel),
                         startLifetime = life,
-                        startSize = Mathf.Clamp(cell * Random.Range(1.6f, 2.6f) * sizeBoost * grain, 0.15f, 3f * sizeBoost),
+                        startSize = size,
                         rotation = Random.Range(0f, 360f),
                         startColor = c
                     };
@@ -205,7 +218,7 @@ namespace VortexVapor
             col.color = grad;
             var size = ps.sizeOverLifetime;
             size.enabled = true;
-            size.size = new ParticleSystem.MinMaxCurve(1f, AnimationCurve.Linear(0f, 0.7f, 1f, 1.5f));
+            size.size = new ParticleSystem.MinMaxCurve(1f, AnimationCurve.Linear(0f, SizeStart, 1f, SizeEnd));
 
             var r = go.GetComponent<ParticleSystemRenderer>();
             r.renderMode = ParticleSystemRenderMode.Billboard;

@@ -100,7 +100,12 @@ def main():
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = 0o644 << 16
             with open(path, "rb") as f:
-                z.writestr(info, f.read())
+                data = f.read()
+            if arc == root + "README.md":
+                # The README links to repo-only docs; drop those rows from the shipped copy.
+                data = b"".join(l for l in data.splitlines(True)
+                                if not any(("docs/" + d).encode() in l for d in REPO_ONLY_DOCS))
+            z.writestr(info, data)
 
     with zipfile.ZipFile(out) as z:
         names = z.namelist()

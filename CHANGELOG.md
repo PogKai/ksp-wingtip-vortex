@@ -4,7 +4,7 @@ All notable changes to KSP Wingtip Vortex.
 
 ---
 
-## Unreleased
+## 1.4.1 — Smooth wake
 
 ### Fixed
 
@@ -19,6 +19,11 @@ All notable changes to KSP Wingtip Vortex.
   flight's distance against a wavelength that moves slightly with frame time, so any spiral
   already drawn jumped to a random phase every frame. The phase is now set when each stretch of
   rope is laid.
+* **Wing vapor is spread evenly over the wing and sits on its suction surface.** Puffs were drawn
+  in independent random draws, so the sheet clumped and left gaps, and each was centred on the skin,
+  so half of every puff hung below the wing. They are now placed one per equal slice of the part's
+  vapor, thin vapor still gets faint puffs, and each puff starts resting on the skin and rises as it
+  grows so its lower edge stays on the surface.
 
 ---
 

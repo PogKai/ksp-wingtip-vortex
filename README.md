@@ -38,6 +38,14 @@ KSP 1.12.x · no dependencies · to upgrade, replace the folder · to remove, de
 
 <br>
 
+## New in 1.4.1
+
+* **Smooth wake in a hard pull**: the tube no longer draws a sawtooth, one tooth per frame, in a 7+ g pull at speed
+* **Wing vapor is more even** over the wing and rests on its upper surface
+* Everything else in the [changelog](CHANGELOG.md)
+
+<br>
+
 ## New in 1.4.0
 
 * **Ferram Aerospace Research support**: vortices and wing vapor read FAR's own per-wing lift and stall. Still no dependency, and stock behaves as before

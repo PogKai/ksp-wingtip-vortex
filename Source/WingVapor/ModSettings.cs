@@ -15,8 +15,8 @@ namespace VortexVapor
         public const float MaxIntensity = 2f;
 
         static bool loaded;
-        static bool vortexOn = true, vaporOn = true;
-        static float vortexIntensity = 1f, vaporIntensity = 1f;
+        static bool vortexOn = true, vaporOn = true, vaporVolumetric = true;
+        static float vortexIntensity = 1f, vaporIntensity = 1f, vaporThickness = 1f;
 
         // Set by the setters; the window saves shortly after the last change.
         public static bool Dirty;
@@ -27,8 +27,12 @@ namespace VortexVapor
         public static float VaporScale { get { Ensure(); return vaporOn ? vaporIntensity : 0f; } }
 
         public static bool VortexOn { get { Ensure(); return vortexOn; } set { Ensure(); if (vortexOn != value) { vortexOn = value; Touch(); } } }
+        // Draw the vapor as volumetric clouds (VaporVolume) when Waterfall is installed.
+        public static bool VaporVolumetric { get { Ensure(); return vaporVolumetric; } set { Ensure(); if (vaporVolumetric != value) { vaporVolumetric = value; Touch(); } } }
         public static bool VaporOn { get { Ensure(); return vaporOn; } set { Ensure(); if (vaporOn != value) { vaporOn = value; Touch(); } } }
         public static float VortexIntensity { get { Ensure(); return vortexIntensity; } set { Ensure(); value = Clamp(value); if (vortexIntensity != value) { vortexIntensity = value; Touch(); } } }
+        // Scales how far the volumetric cloud stands off the wing (VaporVolume.CloudHeightChords).
+        public static float VaporThickness { get { Ensure(); return vaporThickness; } set { Ensure(); value = Clamp(value); if (vaporThickness != value) { vaporThickness = value; Touch(); } } }
         public static float VaporIntensity { get { Ensure(); return vaporIntensity; } set { Ensure(); value = Clamp(value); if (vaporIntensity != value) { vaporIntensity = value; Touch(); } } }
 
         static float Clamp(float v) { return Mathf.Clamp(v, 0f, MaxIntensity); }
@@ -37,8 +41,8 @@ namespace VortexVapor
         public static void ResetToDefaults()
         {
             Ensure();
-            vortexOn = vaporOn = true;
-            vortexIntensity = vaporIntensity = 1f;
+            vortexOn = vaporOn = vaporVolumetric = true;
+            vortexIntensity = vaporIntensity = vaporThickness = 1f;
             Touch();
         }
 
@@ -54,8 +58,10 @@ namespace VortexVapor
                 if (node == null) return;
                 vortexOn = ReadBool(node, "vortexEnabled", true);
                 vaporOn = ReadBool(node, "vaporEnabled", true);
+                vaporVolumetric = ReadBool(node, "vaporVolumetric", true);
                 vortexIntensity = Clamp(ReadFloat(node, "vortexIntensity", 1f));
                 vaporIntensity = Clamp(ReadFloat(node, "vaporIntensity", 1f));
+                vaporThickness = Clamp(ReadFloat(node, "vaporThickness", 1f));
             }
             catch (Exception e) { Debug.Log("[VORTEX] settings: could not read, using defaults: " + e.Message); }
         }
@@ -71,8 +77,10 @@ namespace VortexVapor
                 var node = new ConfigNode("WingtipVortexSettings");
                 node.AddValue("vortexEnabled", vortexOn.ToString());
                 node.AddValue("vaporEnabled", vaporOn.ToString());
+                node.AddValue("vaporVolumetric", vaporVolumetric.ToString());
                 node.AddValue("vortexIntensity", vortexIntensity.ToString("F2", CultureInfo.InvariantCulture));
                 node.AddValue("vaporIntensity", vaporIntensity.ToString("F2", CultureInfo.InvariantCulture));
+                node.AddValue("vaporThickness", vaporThickness.ToString("F2", CultureInfo.InvariantCulture));
                 node.Save(path);
             }
             catch (Exception e) { Debug.Log("[VORTEX] settings: could not save: " + e.Message); }
@@ -137,7 +145,7 @@ namespace VortexVapor
         void AddButton()
         {
             if (button != null || ApplicationLauncher.Instance == null) return;
-            if (icon == null) icon = MakeIcon();
+            if (icon == null) icon = LoadIcon() ?? MakeIcon();
             button = ApplicationLauncher.Instance.AddModApplication(
                 OnOpen, OnClose, null, null, null, null, ApplicationLauncher.AppScenes.FLIGHT, icon);
         }
@@ -184,10 +192,15 @@ namespace VortexVapor
         {
             GUILayout.Space(4f);
             ModSettings.VortexOn = GUILayout.Toggle(ModSettings.VortexOn, " Wingtip vortices");
-            ModSettings.VortexIntensity = IntensityRow(ModSettings.VortexIntensity, ModSettings.VortexOn);
+            ModSettings.VortexIntensity = IntensityRow("Intensity", ModSettings.VortexIntensity, ModSettings.VortexOn);
             GUILayout.Space(6f);
             ModSettings.VaporOn = GUILayout.Toggle(ModSettings.VaporOn, " Wing vapor");
-            ModSettings.VaporIntensity = IntensityRow(ModSettings.VaporIntensity, ModSettings.VaporOn);
+            ModSettings.VaporIntensity = IntensityRow("Intensity", ModSettings.VaporIntensity, ModSettings.VaporOn);
+            ModSettings.VaporThickness = IntensityRow("Thickness", ModSettings.VaporThickness, ModSettings.VaporOn && ModSettings.VaporVolumetric && VaporVolume.Available);
+            if (VaporVolume.Available)
+                ModSettings.VaporVolumetric = GUILayout.Toggle(ModSettings.VaporVolumetric, " Volumetric cloud (Waterfall)");
+            else
+                GUILayout.Label("Volumetric cloud needs Waterfall installed.");
             GUILayout.Space(8f);
 
             GUILayout.BeginHorizontal();
@@ -202,12 +215,12 @@ namespace VortexVapor
         }
 
         // 0 to MaxIntensity in 5% steps, snapping to 100%; greyed out while its effect is off.
-        static float IntensityRow(float value, bool enabled)
+        static float IntensityRow(string label, float value, bool enabled)
         {
             bool wasEnabled = GUI.enabled;
             GUI.enabled = wasEnabled && enabled;
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Intensity", GUILayout.Width(64f));
+            GUILayout.Label(label, GUILayout.Width(64f));
             float raw = GUILayout.HorizontalSlider(value, 0f, ModSettings.MaxIntensity);
             GUILayout.Label(Mathf.RoundToInt(value * 100f) + "%", GUILayout.Width(44f));
             GUILayout.EndHorizontal();
@@ -218,7 +231,21 @@ namespace VortexVapor
             return Mathf.Abs(v - 1f) < 0.06f ? 1f : v;
         }
 
-        // White vortex spiral, 38x38 like the stock launcher icons; drawn here, no asset to ship.
+        // Textures/icon.png next to the Plugins folder; null if missing, and MakeIcon stands in.
+        static Texture2D LoadIcon()
+        {
+            try
+            {
+                string plugins = Path.GetDirectoryName(typeof(ModSettings).Assembly.Location);
+                string path = plugins != null ? Path.Combine(Path.Combine(Path.GetDirectoryName(plugins), "Textures"), "icon.png") : null;
+                if (path == null || !File.Exists(path)) return null;
+                var tex = new Texture2D(2, 2, TextureFormat.ARGB32, false);
+                return tex.LoadImage(File.ReadAllBytes(path)) ? tex : null;
+            }
+            catch (Exception e) { Debug.Log("[VORTEX] settings: could not load the icon: " + e.Message); return null; }
+        }
+
+        // White vortex spiral, 38x38 like the stock launcher icons; drawn here as a fallback.
         static Texture2D MakeIcon()
         {
             const int n = 38;

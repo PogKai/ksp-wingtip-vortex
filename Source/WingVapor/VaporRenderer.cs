@@ -26,7 +26,7 @@ namespace VortexVapor
         // A puff's size over its life, as a multiple of its start size.
         public const float SizeStart = 0.7f, SizeEnd = 1.5f;
 
-        class Source
+        public class Source
         {
             public Part part;
             public PartBox box;
@@ -37,6 +37,7 @@ namespace VortexVapor
 
         readonly Dictionary<long, Source> sources = new Dictionary<long, Source>();
         readonly List<Source> active = new List<Source>();
+        readonly VaporVolume volume = new VaporVolume();
         GameObject go;
         ParticleSystem ps;
         Part root;
@@ -94,6 +95,13 @@ namespace VortexVapor
                 wanted += sum * (pf.area / pf.samples.Length) * PuffsPerSquareMetre;
                 active.Add(src);
             }
+            // With Waterfall installed the vapor is drawn as volumetric cloud, and no puffs.
+            if (ModSettings.VaporVolumetric && VaporVolume.Available)
+            {
+                volume.Update(active, vessel, down, tint, userScale, ModSettings.VaporThickness, dt);
+                return;
+            }
+            volume.Hide();
             if (active.Count == 0) return;
 
             float scale = wanted > MaxPuffsPerSecond ? MaxPuffsPerSecond / wanted : 1f;
@@ -257,6 +265,7 @@ namespace VortexVapor
             go = null;
             ps = null;
             root = null;
+            volume.Clear();
             sources.Clear();
         }
     }

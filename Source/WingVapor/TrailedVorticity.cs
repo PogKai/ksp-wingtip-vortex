@@ -22,7 +22,8 @@ namespace VortexVapor
     // Answers "which parts' volumes contain this point", as flight IDs, excluding one part.
     public interface IBodyQuery
     {
-        void BodiesAt(Vector3 world, long exclude, List<long> into);
+        // `solid` asks for the part's real shape where it is known, not just its bounding box.
+        void BodiesAt(Vector3 world, long exclude, List<long> into, bool solid = false);
     }
 
     // One trailing vortex line leaving the airframe this step.

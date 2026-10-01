@@ -28,6 +28,7 @@ namespace VortexVapor
         public Vector3 localNormal;  // part-local unit axis along which the part is thinnest
         public Vector3 localU, localV;   // part-local unit axes of the planform plane
         public Planform planform;    // metres, in (u, v) about the centre
+        Collider[] solids;           // the part's own testable colliders, found on first use
 
         public Vector3 WorldCenter { get { return t.TransformPoint(center); } }
 
@@ -70,6 +71,39 @@ namespace VortexVapor
             Vector3 l = t.InverseTransformPoint(world) - center;
             return Mathf.Abs(l.x) <= extents.x && Mathf.Abs(l.y) <= extents.y && Mathf.Abs(l.z) <= extents.z;
         }
+
+        // Inside the part's own colliders, not just its box: a round fuselage fills well under
+        // its box, and a wing panel laid along its side is outside it. Falls back to the box for
+        // a part with no collider this can test.
+        public bool ContainsSolid(Vector3 world)
+        {
+            if (!Contains(world)) return false;
+            if (solids == null) solids = FindSolids();
+            bool tested = false;
+            foreach (Collider c in solids)
+            {
+                if (c == null || !c.enabled || !c.gameObject.activeInHierarchy) continue;
+                tested = true;
+                if ((c.ClosestPoint(world) - world).sqrMagnitude < 1e-6f) return true;
+            }
+            return !tested;
+        }
+
+        Collider[] FindSolids()
+        {
+            var found = new List<Collider>();
+            Part part = t.GetComponent<Part>();
+            foreach (Collider c in t.GetComponentsInChildren<Collider>())
+            {
+                if (c.isTrigger) continue;
+                if (part != null && c.GetComponentInParent<Part>() != part) continue;   // a child part's
+                // ClosestPoint cannot test a concave mesh; without it the box stands in.
+                var mesh = c as MeshCollider;
+                if (mesh != null && !mesh.convex) return new Collider[0];
+                if (mesh != null || c is BoxCollider || c is SphereCollider || c is CapsuleCollider) found.Add(c);
+            }
+            return found.ToArray();
+        }
     }
 
     // The vessel's parts as solid volumes, for TrailedVorticity's carry-through test and the wing
@@ -104,7 +138,7 @@ namespace VortexVapor
             }
         }
 
-        public void BodiesAt(Vector3 world, long exclude, List<long> into)
+        public void BodiesAt(Vector3 world, long exclude, List<long> into, bool solid = false)
         {
             into.Clear();
             for (int k = 0; k < boxes.Count; k++)
@@ -113,7 +147,7 @@ namespace VortexVapor
                 // test costs a transform.
                 Vector3 d = world - centers[k];
                 if (d.sqrMagnitude > radius2[k] || ids[k] == exclude) continue;
-                if (boxes[k].Contains(world)) into.Add(ids[k]);
+                if (solid ? boxes[k].ContainsSolid(world) : boxes[k].Contains(world)) into.Add(ids[k]);
             }
         }
     }

@@ -62,6 +62,9 @@ namespace VortexVapor
         // fin) are unaffected.
         public static bool CondenseAgainstLift = false;
         const float AgainstCos = 0.3f;
+        // A section whose suction side faces the craft's belly makes no vapor: none under the
+        // wings, and none in a negative-g push. A style rule like the one above; needs `dorsal`.
+        public static bool CondenseUnderneath = false;
 
         static readonly Dictionary<long, VaporField> fields = new Dictionary<long, VaporField>();
         static readonly List<long> stale = new List<long>();
@@ -99,7 +102,8 @@ namespace VortexVapor
         // `bodies` answers which parts contain a point, for the faces buried inside a fuselage or
         // nacelle; null skips that test.
         public static void Compute(List<Surface> surfaces, Vector3 down, float rho, float speed,
-            float kelvin, float pascal, float humidity, float mach, float dt, IBodyQuery bodies = null)
+            float kelvin, float pascal, float humidity, float mach, float dt, IBodyQuery bodies = null,
+            Vector3 dorsal = default(Vector3))
         {
             foreach (var f in fields.Values) f.seen = false;
             // The chord is measured across every part, so a change of the part set re-measures all.
@@ -219,6 +223,7 @@ namespace VortexVapor
                 // Whether this part lifts against the aircraft's net lift is a property of the
                 // part, not of the sample.
                 float partAgainst = Vector3.Dot(fr.n, liftDir);
+                float partDorsal = Vector3.Dot(fr.n, dorsal);
                 if (live)
                 {
                     for (int b = 0; b < Strips; b++)
@@ -251,7 +256,8 @@ namespace VortexVapor
                         stripCamberTerm[b] = ct; stripAlphaTerm[b] = at;
                         stripSideOf[b] = side;
                         stripBit[b] = side > 0f ? 1 : 2;   // the face the vapor would be on: a face inside a body has no flow over it
-                        stripDead[b] = !CondenseAgainstLift && partAgainst * side < -AgainstCos;
+                        stripDead[b] = (!CondenseAgainstLift && partAgainst * side < -AgainstCos)
+                                       || (!CondenseUnderneath && partDorsal * side < -AgainstCos);
                         // Can any sample of the strip condense at all? If the most its shapes allow
                         // is below the visible onset, the strip is quiet and its samples only fade
                         // out.
@@ -538,7 +544,7 @@ namespace VortexVapor
 
         static bool InBody(IBodyQuery bodies, Vector3 p, long self)
         {
-            bodies.BodiesAt(p, self, inside);
+            bodies.BodiesAt(p, self, inside, true);
             for (int k = 0; k < inside.Count; k++) if (!liftingIds.Contains(inside[k])) return true;
             return false;
         }

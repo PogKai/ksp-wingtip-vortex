@@ -11,6 +11,7 @@ Writes dist/WingtipVortex_<version>.zip in the layout KSP mods are installed in:
     GameData/WingtipVortex/Source/WingtipVortex.cs, Source/WingVapor/*.cs
     GameData/WingtipVortex/README.md, CHANGELOG.md, license.md
     GameData/WingtipVortex/docs/*.md, docs/images/*
+    GameData/WingtipVortex/Textures/icon.png
 
 then reads the zip back and checks that the DLL inside is the one just built. Refuses to run when
 
@@ -84,6 +85,7 @@ def main():
         for name in sorted(os.listdir(folder)):
             if os.path.isfile(os.path.join(folder, name)) and name not in REPO_ONLY_DOCS:
                 files[root + sub.replace(os.sep, "/") + "/" + name] = os.path.join(folder, name)
+    files[root + "Textures/icon.png"] = os.path.join(ROOT, "Textures", "icon.png")
     files[root + "Source/WingtipVortex.cs"] = os.path.join(ROOT, "Source", "WingtipVortex.cs")
     vapor = os.path.join(ROOT, "Source", "WingVapor")
     for name in sorted(os.listdir(vapor)):

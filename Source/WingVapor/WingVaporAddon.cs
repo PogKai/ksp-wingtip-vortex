@@ -217,7 +217,7 @@ namespace VortexVapor
                 vaporPending = false;
                 WingVapor.Compute(surfaces, downstream, vaporRho, vaporSpeed,
                     (float)vessel.atmosphericTemperature, (float)(vessel.staticPressurekPa * 1000.0),
-                    Humidity(), (float)vessel.mach, stride * Time.fixedDeltaTime, bodies);
+                    Humidity(), (float)vessel.mach, stride * Time.fixedDeltaTime, bodies, Dorsal());
             }
             vaporDown = downstream;
             stepTimer.Stop();
@@ -247,6 +247,14 @@ namespace VortexVapor
             emitFrames++;
             double ms = (emitTimer.ElapsedTicks - t0) * 1000.0 / Stopwatch.Frequency;
             if (ms > emitWorstMs) emitWorstMs = ms;
+        }
+
+        // Unit direction out of the craft's top; the control point's forward axis points at its
+        // belly.
+        Vector3 Dorsal()
+        {
+            Transform t = vessel.ReferenceTransform;
+            return t != null ? -t.forward : Vector3.zero;
         }
 
         float RhoSeaLevel()

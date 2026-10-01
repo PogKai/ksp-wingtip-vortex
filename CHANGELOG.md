@@ -4,6 +4,36 @@ All notable changes to KSP Wingtip Vortex.
 
 ---
 
+## 1.5.0 — In-game settings
+
+An in-game settings window, and no more wing vapor under the wings.
+
+### Added
+
+* **In-game settings.** In flight, a button on the app launcher (or **Alt+V**) opens a window to
+  switch the wingtip vortices and the wing vapor on or off and set each one's intensity from 0 to
+  200%. The settings scale what is drawn and move none of the physics, so 100% looks exactly as
+  before. They are saved to `PluginData/settings.cfg` in the mod's folder; deleting that file
+  restores the defaults.
+* **Support for the Volumetric Wing Vapor add-on.** [Volumetric Wing Vapor](https://github.com/PogKai/ksp-volumetric-wing-vapor)
+  is a separate, optional mod that draws the wing vapor as a soft volumetric cloud with Waterfall's
+  shader. When it is installed, the settings window gains a switch to turn the cloud on or off and
+  a thickness slider for it. Nothing changes for players without it. For mod authors: another mod
+  can draw the vapor this mod computes in place of the puffs and add rows to the settings window
+  (`VaporRenderer.Drawer`, `ModSettings.VaporRows`), and the DLL now declares itself to KSP as
+  `WingtipVortex` 1.5, so such a mod can depend on it.
+
+### Changed
+
+* **No wing vapor underneath.** A wing section whose suction side faces the craft's belly now makes
+  no vapor, so nothing forms under the wings or in a negative-g push. A style choice, like the rule
+  for surfaces lifting against the aircraft.
+* **Wing panels laid along a fuselage can make vapor.** Whether a wing face is buried inside a body
+  was judged by the body's bounding box, which a round fuselage fills well under, so panels beside
+  it were wrongly ruled out. It is now judged by the body's colliders.
+
+---
+
 ## 1.4.1 — Smooth wake
 
 ### Fixed

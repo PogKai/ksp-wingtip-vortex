@@ -18,7 +18,7 @@
 
 ## What it does
 
-Fly. That's it: no menus, no settings, no per-craft setup.
+Fly. That's it: no per-craft setup, and nothing you have to configure.
 
 | | |
 |---|---|
@@ -35,6 +35,24 @@ Fly. That's it: no menus, no settings, no per-craft setup.
 3. Fly
 
 KSP 1.12.x · no dependencies · to upgrade, replace the folder · to remove, delete it.
+
+<br>
+
+## Add-on: Volumetric Wing Vapor
+
+[Volumetric Wing Vapor](https://github.com/PogKai/ksp-volumetric-wing-vapor) is a separate, optional mod that draws the wing vapor as one soft volumetric cloud over each wing, in place of the puffs, using [Waterfall](https://github.com/post-kerbin-mining-corporation/Waterfall)'s shader. It needs this mod (1.5.0 or later) and Waterfall.
+
+* **When it is installed**, the settings window gains a **Volumetric cloud (Waterfall)** switch, to turn the cloud off and go back to the puffs or on again, and a thickness slider for the cloud
+* **Without it**, nothing changes: the window shows neither, the vapor is the puffs, and this mod still has no dependencies
+
+<br>
+
+## New in 1.5.0
+
+* **In-game settings**: a window on the app launcher (or Alt+V) to switch the vortices and the wing vapor on or off and set their intensity
+* **No vapor under the wings** or in a negative-g push
+* **Ready for [Volumetric Wing Vapor](https://github.com/PogKai/ksp-volumetric-wing-vapor)**, an optional add-on that draws the wing vapor as a volumetric cloud
+* Everything else in the [changelog](CHANGELOG.md)
 
 <br>
 
@@ -69,7 +87,7 @@ Both effects are limited by air density, not height, so the limits fall at a dif
 
 * Works with **stock aerodynamics** or **Ferram Aerospace Research** (tested with FAR 0.16.2), detected automatically
 * Works alongside Scatterer, EVE, Parallax, Deferred, Singularity and Kopernicus
-* **In-game settings:** in flight, click the vortex button on the app launcher (or press **Alt+V**) to switch the wingtip vortices and the wing vapor on or off and set each one's intensity from 0 to 200%. 100% is the default look. With [Waterfall](https://github.com/post-kerbin-mining-corporation/Waterfall) installed, the wing vapor is drawn as a soft volumetric cloud over the main wings, with its own thickness setting and a switch back to the particle version; Waterfall is optional. Choices are saved to `PluginData/settings.cfg` in the mod's folder
+* **In-game settings:** in flight, click the vortex button on the app launcher (or press **Alt+V**) to switch the wingtip vortices and the wing vapor on or off and set each one's intensity from 0 to 200%. 100% is the default look. Choices are saved to `PluginData/settings.cfg` in the mod's folder. With the [Volumetric Wing Vapor](https://github.com/PogKai/ksp-volumetric-wing-vapor) add-on installed, the window also has a switch for the volumetric cloud
 
 <br>
 

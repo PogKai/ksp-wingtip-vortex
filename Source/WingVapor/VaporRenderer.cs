@@ -52,6 +52,9 @@ namespace VortexVapor
             // Nothing condensing (the usual case, and always above the vapor's altitude): no work,
             // and no particle system on the vessel.
             if (WingVapor.Fields.Count == 0) { if (go != null) Clear(); return; }
+            // Player intensity (ModSettings): scales puff opacity, not count. Off at zero.
+            float userScale = ModSettings.VaporScale;
+            if (userScale <= 0.01f) { if (go != null) Clear(); return; }
             EnsureMaterial();
             EnsureSystem(vessel.rootPart);
             // WingtipVortex's night floor: 0.2 of daylight brightness in full shadow.
@@ -125,7 +128,7 @@ namespace VortexVapor
                     // smoothly.
                     float d = f.density[j];
                     Color c = tint;
-                    c.a = PuffAlpha * Mathf.Lerp(0.08f, 1f, d);
+                    c.a = Mathf.Clamp01(PuffAlpha * userScale * Mathf.Lerp(0.08f, 1f, d));
                     float grain = Mathf.Lerp(0.45f, 1f, d);
                     float size = Mathf.Clamp(cell * Random.Range(1.6f, 2.6f) * sizeBoost * grain, 0.15f, 3f * sizeBoost);
                     // Vapor forms on the suction (upper) surface only. A puff starts resting on the

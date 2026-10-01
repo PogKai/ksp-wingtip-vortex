@@ -2956,6 +2956,9 @@ public class WingtipVortex : MonoBehaviour
                 }
             }
 
+            // Player intensity (ModSettings), applied last; zero when switched off.
+            visible *= VortexVapor.ModSettings.VortexScale;
+
             // Record what is being shed now; ApplyShedAppearance replays it along the trail.
             shedHistory[i][shedWrite] = visible;
 

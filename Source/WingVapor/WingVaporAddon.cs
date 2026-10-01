@@ -156,6 +156,14 @@ namespace VortexVapor
                 return;
             }
 
+            // Switched off in the settings window: skip the solve; clearing the fields tears the renderer down.
+            if (ModSettings.VaporScale <= 0.01f)
+            {
+                if (WingVapor.Fields.Count > 0) WingVapor.Clear();
+                vaporPending = false;
+                return;
+            }
+
             Vector3 velocity = vessel.GetSrfVelocity();
             float speed = velocity.magnitude;
             float rho = (float)vessel.atmDensity;

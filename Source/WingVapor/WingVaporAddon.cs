@@ -8,19 +8,15 @@ using Debug = UnityEngine.Debug;
 
 namespace VortexVapor
 {
-    // Wing vapor: the white sheet over the wings of an aircraft in a hard pull, worked out from the
-    // physics of the air over each lifting part. A second addon in the WingtipVortex assembly; it
-    // shares nothing with the wingtip-vortex code but the log tag and the version.
-    //
+    // Wing vapor: the white sheet over the wings of an aircraft in a hard pull. A second addon in
+    // the WingtipVortex assembly, sharing only the log tag and the version.
     // Wires AeroState -> TrailedVorticity (each part's loading) -> WingVapor (condensation at every
-    // point of every wing) -> VaporRenderer (puffs riding the aircraft) every physics step, with no
-    // anchors, no config file and no GUI.
+    // point of every wing) -> VaporRenderer (puffs riding the aircraft) every physics step.
     [KSPAddon(KSPAddon.Startup.Flight, false)]
     public class WingVaporAddon : MonoBehaviour
     {
-        // Per-second diagnostics (part loading, step times, what is condensing) are written to
-        // KSP.log only when a file named verbose.txt sits in the mod's folder, next to Plugins.
-        // Otherwise the addon logs one line per flight, and nothing more.
+        // Per-second diagnostics are written to KSP.log only when a file named verbose.txt sits in
+        // the mod's folder, next to Plugins.
         public static bool Verbose { get; private set; }
 
         // After this many exceptions the addon switches itself off for the flight rather than throw
@@ -42,11 +38,10 @@ namespace VortexVapor
         private double emitWorstMs = 0.0;
         private readonly List<Surface> surfaces = new List<Surface>();
         private readonly VesselBodies bodies = new VesselBodies();
-        // The vapor's inputs are refreshed every `stride` physics steps, more rarely the bigger the
-        // craft: one step in PartsPerStride-many parts' worth, at most MaxStride. The vapor is
-        // smoothed over WingVapor.SmoothTime (0.12 s) anyway, so 4 steps (0.08 s) between updates
-        // does not show. The loading and the vapor are computed on different steps of the stride
-        // so neither lands on top of the other as a hitch.
+        // Inputs are refreshed every `stride` physics steps, more rarely the bigger the craft (one
+        // step per PartsPerStride parts, at most MaxStride). The vapor is smoothed over
+        // WingVapor.SmoothTime anyway. The loading and the vapor are computed on different steps of
+        // the stride so neither lands on top of the other.
         const int PartsPerStride = 60, MaxStride = 4;
         private int step = 0, stride = 1;
         private bool vaporPending = false;
@@ -102,11 +97,9 @@ namespace VortexVapor
                        && (float)v.atmDensity / Mathf.Max((float)v.mainBody.atmDensityASL, 1e-4f) >= Condensation.CutoffRatio;
         }
 
-        // Moves the vapor to the active craft, except onto a fired missile (BDArmoryCraft.IsMissile):
-        // BDArmory makes a missile the active vessel to follow it, and the vapor then left the
-        // aircraft that fired it for a craft with no stock lifting surfaces to condense on. It
-        // stays on the aircraft instead, which keeps drawing its own vapor while you watch the shot.
-        // `skippedMissile` is the missile last declined, so the per-step poll does not re-test it.
+        // Moves the vapor to the active craft, except onto a fired missile (BDArmory makes a
+        // missile the active vessel to follow it). `skippedMissile` is the missile last declined,
+        // so the per-step poll does not re-test it.
         Vessel skippedMissile;
         void Follow(Vessel active)
         {
@@ -135,8 +128,8 @@ namespace VortexVapor
             catch (Exception e) { Fail("physics step", e); }
         }
 
-        // An exception in a physics step or a frame would repeat 50 or 60 times a second. Log the
-        // first few in full, then stop the addon for the flight and tear down what it made.
+        // An exception in a physics step would repeat every frame. Log the first few, then stop the
+        // addon for the flight and tear down what it made.
         void Fail(string where, Exception e)
         {
             failures++;
@@ -149,9 +142,9 @@ namespace VortexVapor
 
         void PhysicsStep()
         {
-            // The aircraft the vapor was held on (see Follow) destroyed while the camera was on a
-            // missile: nothing switched vessels, so drop its vapor here. Unity's == null is true
-            // for a destroyed object whose reference is still set.
+            // The aircraft the vapor was held on was destroyed while the camera was on a missile;
+            // drop its vapor here. Unity's == null is true for a destroyed object whose reference
+            // is still set.
             if (vessel == null && !ReferenceEquals(vessel, null)) Retarget(null);
             Follow(FlightGlobals.ActiveVessel);
             if (vessel == null || !vessel.loaded) return;
@@ -258,22 +251,18 @@ namespace VortexVapor
             return Condensation.RelativeHumidity((float)vessel.atmDensity, RhoSeaLevel(), (float)vessel.atmosphericTemperature);
         }
 
-        // How lit the air around the vessel is, 0-1, measured the way the wingtip vortices measure
-        // it (Sunlight): by the sun's height above the craft's horizon, so an afternoon sun low in
-        // the sky no longer greys the vapor the way the atmosphere-absorbed solar flux did.
+        // How lit the air around the vessel is, 0-1, measured as the vortices do (Sunlight).
         float Daylight() { return Sunlight.Fraction(vessel); }
 
         // Every second while there is vapor to look at, every five otherwise (verbose only): the
-        // numbers the model rests on, so they can be checked against a real aircraft of similar
-        // size and load.
+        // numbers the model rests on, for checking against a real aircraft.
         void LogValidation(List<PartAeroState> parts, float speed)
         {
             if (Time.time < nextLogTime) return;
             nextLogTime = Time.time + (WingVapor.Coverage > 0f || WingVapor.PeakWater > 0f ? 1f : 5f);
 
-            // Two lift figures, so the log shows how much a plain sum of magnitudes overcounts:
-            // `sum` adds every part's |lift|; `net` is the component along the total lift
-            // direction, which is what actually holds the aircraft up.
+            // Two lift figures: `sum` adds every part's |lift|; `net` is the component along the
+            // total lift direction, which is what holds the aircraft up.
             Vector3 total = Vector3.zero;
             float sumKN = 0f;
             foreach (var p in parts) { total += p.liftForce; sumKN += p.liftForce.magnitude; }

@@ -5,10 +5,8 @@ using UnityEngine;
 
 namespace VortexVapor
 {
-    // One lifting part's aerodynamic state for the current physics frame, in world space. This is
-    // the only place either aero backend (stock or FAR) gets read from — everything downstream
-    // (TrailedVorticity, WakeSimulation) takes these numbers and never touches
-    // ModuleLiftingSurface or FARAPI directly.
+    // One lifting part's aerodynamic state for the current physics frame, in world space. Both aero
+    // backends (stock and FAR) are read only here; everything downstream takes these numbers.
     public struct PartAeroState
     {
         public Part part;
@@ -19,11 +17,9 @@ namespace VortexVapor
         public float stall;         // 0..1, FAR's stalled fraction of this part; 0 under stock
     }
 
-    // A part's geometry in its own frame, measured once from its meshes and cached: its bounds
-    // (for "is this point inside the part"), its thinnest axis (its surface normal), and its
-    // planform, the outline of the part in the plane of the other two axes. Meshes with absurd
-    // bounds are skipped, since visual mods inflate renderer bounds on purpose to defeat frustum
-    // culling and one of those would otherwise poison every measurement.
+    // A part's geometry in its own frame, measured once from its meshes and cached: its bounds, its
+    // thinnest axis (its surface normal), and its planform. Meshes with absurd bounds are skipped,
+    // since visual mods inflate renderer bounds to defeat culling.
     public class PartBox
     {
         public Transform t;
@@ -53,9 +49,8 @@ namespace VortexVapor
         }
         float boundRadius = -1f;
 
-        // Where the planform is now. The normal is read from geometry rather than from the lift
-        // vector, so it never flips when the part's lift changes sign, which would swap its two
-        // span edges and their ids.
+        // Where the planform is now. The normal is read from geometry, not the lift vector, so it
+        // never flips when the lift changes sign.
         public PlaneFrame Frame()
         {
             return new PlaneFrame
@@ -78,11 +73,8 @@ namespace VortexVapor
     }
 
     // The vessel's parts as solid volumes, for TrailedVorticity's carry-through test and the wing
-    // vapor's buried-face test.
-    //
-    // Refresh() takes a snapshot of every part's position once; BodiesAt then costs plain
-    // arithmetic per part. Reading Transform.position for every part on every query was the
-    // v0.4.7 F-22's frame-rate hole: a fighter's 137 parts, 200-odd queries per part measured.
+    // vapor's buried-face test. Refresh() snapshots every part's position once, so a query is plain
+    // arithmetic.
     public class VesselBodies : IBodyQuery
     {
         public Vessel vessel;
@@ -126,10 +118,8 @@ namespace VortexVapor
         }
     }
 
-    // Reads per-part lift/drag every physics frame, from stock's ModuleLiftingSurface or from
-    // FAR's FARWingAerodynamicModel, which FAR puts on wings in place of the stock module. FAR is
-    // bound by reflection: no hard dependency, and a missing or incompatible FAR just leaves
-    // FarAvailable false and the stock path running alone.
+    // Reads per-part lift and drag every physics frame, from stock's ModuleLiftingSurface or FAR's
+    // FARWingAerodynamicModel. FAR is bound by reflection, so it is not a dependency.
     public static class AeroState
     {
         private static MethodInfo miAeroForce;
@@ -164,9 +154,7 @@ namespace VortexVapor
             {
                 Mesh mesh = mf.sharedMesh;
                 if (mesh == null) continue;
-                // Child parts hang under their parent's transform, so GetComponentsInChildren
-                // walks into them. An outer wing panel measured as part of the inner one would
-                // put the inner panel's span edge at the real wingtip.
+                // Skip meshes of child parts, which hang under the parent's transform.
                 if (mf.GetComponentInParent<Part>() != p) continue;
                 Renderer r = mf.GetComponent<Renderer>();
                 if (r == null || !r.enabled) continue;
@@ -232,19 +220,11 @@ namespace VortexVapor
         static Vector3 Axis(int i) { return i == 0 ? Vector3.right : (i == 1 ? Vector3.up : Vector3.forward); }
 
         // The lifting parts as TrailedVorticity takes them, lift in newtons.
-        //
-        // vaporLift: under stock, a control surface that responds to roll (a taileron, an elevon,
-        // an all-moving stabilator) condenses only from the load its symmetry group carries
-        // together, the mean of their lifts. A pure roll deflects the two halves equal and opposite, the mean is zero,
-        // and neither fogs; a pull loads both alike and they fog as before. Stock hands a small,
-        // fully deflected surface a lift coefficient no real tail reaches, with no downwash from
-        // the wing ahead and no lag before the roll rate damps it, so the half deflected with the
-        // aircraft's lift used to fog at every roll input while the wing stayed clear. A STYLE RULE
-        // like WingVapor.CondenseAgainstLift, not physics: a real stabilator deflected hard at high
-        // load can condense briefly. The wake still sheds from the full lift.
-        // Not applied under FAR: FAR models what the rule stands in for (the tail sits in the
-        // wing's downwash, lift coefficients stall at realistic values), so a FAR tail surface
-        // condenses from its own load and the physics decides.
+        // vaporLift: under stock, a control surface that responds to roll (taileron, elevon,
+        // stabilator) condenses only from the mean load of its symmetry group, so a pure roll makes
+        // no vapor and a pull still does. A style rule, not physics, like
+        // WingVapor.CondenseAgainstLift. Not applied under FAR, which models the tail's downwash
+        // and realistic stall. The wake still sheds from the full lift.
         public static void Surfaces(List<PartAeroState> parts, List<Surface> into)
         {
             into.Clear();
@@ -317,9 +297,9 @@ namespace VortexVapor
                 : "[VORTEX] wing vapor: FAR not detected (or API mismatch), using the stock lifting surfaces");
         }
 
-        // FAR's per-wing force, split into lift and drag the way FAR itself splits it: drag is the
-        // part along the airflow. FAR leaves worldSpaceForce at its last value when it stops
-        // computing (out of the air, crawling, shielded in a bay), so those cases read as zero here.
+        // FAR's per-wing force, split into lift and drag the way FAR splits it (drag is the part
+        // along the airflow). FAR leaves worldSpaceForce at its last value when it stops computing,
+        // so those cases read as zero.
         static bool TryReadFarWing(PartModule pm, Vessel vessel, Vector3 flowDir, ref Vector3 lift, ref Vector3 drag, ref float stall)
         {
             if (farWingType == null || !farWingType.IsInstanceOfType(pm)) return false;
@@ -342,10 +322,9 @@ namespace VortexVapor
             return true;
         }
 
-        // Every lifting part reports its own lift/drag, from ModuleLiftingSurface under stock or
-        // FARWingAerodynamicModel under FAR, so this is a real per-part read either way. One entry
-        // per part: a part carrying more than one lifting module is still one surface with one
-        // pair of span edges. flowDir is the unit direction of the vessel's motion through the air.
+        // Every lifting part reports its own lift and drag, one entry per part (a part with several
+        // lifting modules is still one surface). flowDir is the unit direction of the vessel's
+        // motion through the air.
         public static List<PartAeroState> Read(Vessel vessel, Vector3 flowDir)
         {
             var result = scratch;   // reused every call; callers must not hold it across frames
@@ -384,8 +363,8 @@ namespace VortexVapor
             return result;
         }
 
-        // Whole-vessel force from FARAPI, fuselage included. The per-wing read above is what the
-        // vapor uses; this stays for anything that wants the vessel total.
+        // Whole-vessel force from FARAPI, fuselage included; the vapor uses the per-wing read
+        // instead.
         public static Vector3 ReadVesselForceFAR(Vessel vessel)
         {
             if (!farAvailable || vessel == null) return Vector3.zero;

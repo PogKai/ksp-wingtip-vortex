@@ -34,40 +34,26 @@ namespace VortexVapor
         public float coreRadius;    // m, at birth
     }
 
-    // Turns per-part lift into the trailing vortex lines the airframe sheds. There is no notion
-    // here of a wing, a side, a tip or a group, and nothing is anchored.
-    //
-    // THE MODEL. Every lifting part is cut into a few spanwise panels, and every panel is a
-    // horseshoe vortex. By Kutta-Joukowski its bound circulation is Gamma = L / (rho V w), w being
-    // its width across the flow. By Helmholtz a vortex line cannot end in the fluid, so at each of
-    // the panel's two span edges that circulation turns and trails downstream: +Gamma at one edge,
-    // -Gamma at the other. Where two panels meet, their trailing legs mostly cancel; where nothing
-    // continues outboard, the whole bound circulation trails. That place is the wingtip, and no
-    // code decides so.
-    //
-    // A WING IS MANY PARTS. The same wing built as one part, as ten, or as ten with some clipped on
-    // top of each other must shed the same wake. Stock does not give it one: every part lifts for
-    // its full area, so a clipped stack lifts several times over and the loading piles up wherever
-    // the builder stacked parts. Three things undo that, none of which classifies parts:
-    //   - Shared area. Each panel's stock circulation is scaled by the share of its planform that
-    //     no other lifting part also covers (PlanformOverlap). Stacked duplicates add up to one.
-    //   - Resolution. A long part is cut into up to MaxSubPanels panels, stock's lift spread over
-    //     them by local chord, so one long part and several short ones resolve the span alike.
-    //   - Spanwise induction. Stock has none; LiftingLine adds Prandtl's, so loading falls off
-    //     toward the tips and smooths across joints. Each connected structure is then scaled back
-    //     to its stock lift, which is what actually holds the aircraft up.
-    //
-    // Bookkeeping around the edges:
-    //   - Welding. Edges at the same spanwise station are one line: panels meeting at a joint,
-    //     or stacked along the chord (slat, panel, flap) and touching chordwise.
-    //   - Carry-through. An edge that ends inside another part does not end in the fluid. When the
-    //     edges of two lifting surfaces are buried in a part that is not one of their own surfaces,
-    //     face each other and sit level with each other (a wing through a fuselage), the bound
-    //     vortex passes through the body and the two are one line, which cancels in symmetric flight.
-    //   - Folding. Lines too weak to matter are merged into their nearest same-sign neighbour,
-    //     conserving circulation and its centroid, and the count is capped.
-    //
-    // Roll-up happens in WakeSimulation, from the lines' induction on each other.
+    // Turns per-part lift into the trailing vortex lines the airframe sheds. There is no notion of
+    // a wing, side, tip or group; nothing is anchored.
+    // Every lifting part is cut into panels, and every panel is a horseshoe vortex with circulation
+    // Gamma = L / (rho V w) (Kutta-Joukowski). Each panel's circulation trails from its two span
+    // edges, +Gamma at one and -Gamma at the other; where panels meet the legs mostly cancel, and
+    // where nothing continues outboard the whole circulation trails. That place is the wingtip.
+    // A wing is many parts, so:
+    // - Shared area: each panel's stock circulation is scaled by the share of its planform no other
+    // lifting part covers (PlanformOverlap).
+    // - Resolution: a long part is cut into up to MaxSubPanels panels, stock's lift spread over
+    // them by local chord.
+    // - Spanwise induction: LiftingLine adds Prandtl's, and each connected structure is scaled back
+    // to its stock lift.
+    // Bookkeeping:
+    // - Welding: edges at the same spanwise station are one line.
+    // - Carry-through: an edge that ends inside another part does not end in the fluid, so facing
+    // buried edges (a wing through a fuselage) are one line that cancels in symmetric flight.
+    // - Folding: lines too weak to matter merge into their nearest same-sign neighbour, conserving
+    // circulation and centroid, and the count is capped.
+    // Roll-up happens in WakeSimulation.
     public static class TrailedVorticity
     {
         // Two edges closer than this fraction of the narrower local panel width are the same
@@ -84,24 +70,17 @@ namespace VortexVapor
         public const float MinLineFraction = 0.05f;
         // Most lines shed per step. Wake cost is quadratic in it (see WakeSimulation).
         public const int MaxLines = 16;
-        // Core radius at birth as a fraction of the local chord. ASSUMPTION: a near-tip core of a
-        // few percent of chord. To be pinned down with the condensation model (Milestone 3).
+        // Core radius at birth as a fraction of the local chord. Assumed: a near-tip core of a few
+        // percent of chord.
         public const float CoreChordFraction = 0.05f;
-        // ...but never smaller than this fraction of the local panel width. Each line stands for
-        // the vortex sheet shed across its panels, and a sheet cut into point vortices only
-        // behaves like a sheet if neighbouring cores reach toward each other (the vortex-blob
-        // overlap condition). A third keeps neighbours distinct (their cores do not touch)
-        // while lines much closer than their spacing, like a narrow control surface's two edges,
-        // overlap and net out instead of forming a dipole that flies off at the speed clamp.
-        // Without it a pointed tip got a core of ~0 m (5% of a zero chord). v0.3.0 flights.
+        // ...but never smaller than this fraction of the local panel width, so neighbouring cores
+        // overlap like a vortex sheet, and lines much closer than their spacing (a narrow control
+        // surface's two edges) net out instead of forming a dipole.
         public const float BlobFraction = 0.35f;
         // A part is cut into about span / mean chord panels, at most this many.
         public const int MaxSubPanels = 4;
-        // How often the lifting-line matrix is rebuilt, s. It depends on geometry and on the flow
-        // direction in the vessel's frame, both slow; stock's loads change every step and are
-        // back-substituted every step. Rebuilding is cubic in the panel count (2 ms a step at 0.1 s
-        // on a 242-part craft offline), and a few degrees of angle-of-attack change between
-        // rebuilds barely moves the kernel.
+        // How often the lifting-line matrix is rebuilt, s. Rebuilding is cubic in the panel count,
+        // and it depends only on slow-changing geometry and flow direction.
         public const float LiftingLineRefresh = 0.4f;
 
         // Set to true to fill `Dump` on the next step.
@@ -388,15 +367,10 @@ namespace VortexVapor
             return list;
         }
 
-        // 2. Edges at the same station are one line: side by side along the span (a joint, the
-        //    two edges face each other) or stacked along the chord (parallel edges, parts touching
-        //    chordwise). The chordwise offset is ignored when measuring, since two lines at the
-        //    same cross-flow position are the same line downstream.
-        //
-        //    Which edges weld depends only on the airframe and on sideslip, and the all-pairs test
-        //    is the most expensive thing in this file (about two thirds of it at 66 parts), so the
-        //    pairs are found once per AttachRefreshInterval, or when the edge set changes, and
-        //    replayed every step in between.
+        // 2. Edges at the same station are one line: side by side along the span (a joint) or
+        // stacked along the chord (parts touching chordwise). The chordwise offset is ignored. The
+        // all-pairs test is the most expensive thing in this file, so pairs are found once per
+        // AttachRefreshInterval or when the edge set changes, and replayed in between.
         static bool Weld(int m, float time)
         {
             long signature = m;
@@ -447,19 +421,13 @@ namespace VortexVapor
         }
 
         // 3. Carry-through. A group is buried when every one of its edges ends inside a part that
-        //    is not itself one of the group's surfaces (so a joint between two panels, where each
-        //    edge ends inside its neighbour, does not count). Two buried groups facing each other
-        //    across the body, level with each other, are the same bound vortex passing through
-        //    it. Mutual nearest only, so a wing root pairs with the other wing root and not with
-        //    the canard root on the far side.
-        // 3b. Everything buried in the same solid body is one line through that body. Vorticity
-        //     that trails from inside a fuselage cannot leave it there; the body carries it. So
-        //     every buried group whose ends lie inside the same non-lifting part is pooled, and in
-        //     symmetric flight the pool cancels. This catches what the facing rule above cannot:
-        //     the joint between two parts clipped into a fuselage has no one outward direction,
-        //     and a KSP fighter can have a dozen of them (v0.3.0 Su-33). A wingtip buried in a tip
-        //     pod still trails from the tip, because nothing else shares the pod, and a wing does
-        //     not count as a body here: its own bound vortex is already in the model.
+        // is not one of the group's own surfaces. Two buried groups facing each other across the
+        // body, level with each other, are one bound vortex passing through it. Mutual nearest
+        // only.
+        // 3b. Everything buried in the same solid body is one line through that body: vorticity
+        // trailing from inside a fuselage cannot leave it, so the pool is merged and cancels in
+        // symmetric flight. A wing does not count as a body, since its own bound vortex is already
+        // in the model.
         static void PoolInsideBodies(int m)
         {
             // rootOf, buried and the member lists are from before carry-through; Union copes with
@@ -506,9 +474,9 @@ namespace VortexVapor
                     if (parent[h] != h || !buried[h]) continue;
                     if (Vector3.Dot(outSum[g], outSum[h]) > -FacingDot) continue;
 
-                    // `along` is the gap between them: positive across a fuselage, negative (down to
-                    // minus a panel's span) where two panels overlap. Far more negative means the
-                    // two point away from each other, like a pair of wingtip pods.
+                    // `along` is the gap between them: positive across a fuselage, negative where
+                    // two panels overlap, far more negative where the two point away from each
+                    // other (a pair of wingtip pods).
                     float narrower = Mathf.Min(minSpan[g], minSpan[h]);
                     float tol = EdgeWeldFraction * narrower;
                     Vector3 d = wPos[h] / wSum[h] - wPos[g] / wSum[g];
@@ -580,11 +548,10 @@ namespace VortexVapor
             }
         }
 
-        // 5. The wake must carry exactly the lift that holds the aircraft up, which is stock's. The
-        //    lifting line already scales each structure's panels to it, but carry-through then
-        //    adds lift of its own: the bound vortex spans the fuselage, which stock never gives any
-        //    lift (19% of the total on the offline airliner check). So each structure is scaled
-        //    once more, by the lift its trailing lines actually carry, rho V (t x sum gamma r).
+        // 5. The wake must carry exactly the lift that holds the aircraft up, which is stock's.
+        // Carry-through adds lift of its own (the bound vortex spans the fuselage), so each
+        // structure is scaled once more by the lift its trailing lines actually carry, rho V (t x
+        // sum gamma r).
         static void MatchStockLift(int m, Vector3 down)
         {
             int np = panels.Count;
@@ -685,12 +652,11 @@ namespace VortexVapor
             return false;
         }
 
-        // 6. First, lines whose cores overlap in the cross-flow plane are one line, exactly as the
-        //    wake would merge them a step later (same sign: circulation-weighted centroid; opposite
-        //    sign: the net, carried by the stronger). Then fold the weakest line into its nearest
-        //    same-sign neighbour until every line clears the threshold and the count is within
-        //    MaxLines. Circulation and its cross-flow centroid are conserved; a line with no
-        //    same-sign neighbour is dropped.
+        // 6. First, lines whose cores overlap in the cross-flow plane are one line (same sign:
+        // circulation-weighted centroid; opposite sign: the net, carried by the stronger). Then
+        // fold the weakest line into its nearest same-sign neighbour until every line clears the
+        // threshold and the count is within MaxLines; a line with no same-sign neighbour is
+        // dropped.
         static void Fold(Vector3 down, float threshold)
         {
             // One sweep per pass (a merge moves line i a little, so it is re-checked against the
@@ -751,11 +717,9 @@ namespace VortexVapor
             }
         }
 
-        // The loading the last Compute settled on at a point of surface `surface` (its index in the
-        // list passed to Compute): the bound circulation and chord of the panel spanning that
-        // point, and the share of that chord which is this part's own rather than a clipped
-        // neighbour's. False if the surface got no panels. Used by the wing vapor, so the vapor
-        // sees the same shared-area and lifting-line loading as the wake.
+        // The loading the last Compute settled on at a point of surface `surface`: the bound
+        // circulation and chord of the panel spanning that point, and the share of that chord which
+        // is this part's own. False if the surface got no panels. Used by the wing vapor.
         public static bool PanelAt(int surface, Vector3 world, out float gamma, out float chord, out float share)
         {
             gamma = 0f; chord = 0f; share = 1f;

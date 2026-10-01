@@ -3,15 +3,10 @@ using UnityEngine;
 namespace VortexVapor
 {
     // When does the air over a wing turn to cloud? No KSP types, so it can be checked offline.
-    //
-    // Air flowing over the suction side of a wing drops in pressure, and it does so too fast to
-    // exchange heat, so it expands adiabatically and cools: T_local = T (p_local / p)^((g-1)/g).
-    // Its water vapour keeps the same share of the pressure (the mixing ratio is fixed), so the
-    // vapour's partial pressure falls with p_local, but the saturation pressure falls much faster
-    // with the temperature. Where the vapour ends up above saturation it condenses. That is the
-    // whole effect: nothing here knows about g-load, Mach or aircraft type. A fighter in a hard pull
-    // condenses because its loading, and so its suction, is huge; an airliner condenses only in
-    // very humid air; a transonic wing condenses because its suction peak sharpens (Prandtl-Glauert).
+    // Air over the suction side expands adiabatically and cools: T_local = T (p_local /
+    // p)^((g-1)/g). Its vapor keeps the same share of the pressure, but the saturation pressure
+    // falls much faster with temperature, so air that ends up above saturation condenses. Nothing
+    // here knows about g-load, Mach or aircraft type.
     public static class Condensation
     {
         const float Kappa = 0.2857f;   // (gamma - 1) / gamma for air
@@ -20,10 +15,7 @@ namespace VortexVapor
         // than overpressure underneath. About two thirds on a typical airfoil at moderate lift.
         public const float SuctionShare = 0.67f;
 
-        // Visibility goes by how much water actually condenses, not by whether the air is just
-        // past saturation: a trace of droplets is invisible, and the fog thickens with the
-        // condensed mass. g of liquid water per kg of air at first sight, and at full density.
-        // TUNED by eye against the reference, not measured.
+        // Visibility goes by how much water actually condenses. Tuned by eye, not measured.
         public const float OnsetWater = 0.4f, FullWater = 2.5f;
 
         // Saturation vapour pressure over liquid water, Pa (Magnus; also used supercooled).
@@ -33,33 +25,20 @@ namespace VortexVapor
             return 610.94f * Mathf.Exp(17.625f * c / (c + 243.04f));
         }
 
-        // KSP has no humidity, so the air's moisture is a PLACEHOLDER, given as a dew-point spread
-        // (how far the air must cool before it condenses) rather than a relative humidity. The
-        // spread is what decides whether a wing fogs: over-wing condensation is seen when the
-        // temperature is within a couple of degrees of the dew point, i.e. on a humid day, and
-        // a fixed relative humidity turns into a muggy tropical day in KSP's hot lowlands (KSC
-        // runs 305-308 K, where 66% is a 7 K spread). A fixed spread keeps the dew point
-        // tracking the temperature, as it does through a real day.
-        //
-        // Ordinary day: 10 K in the humid boundary layer (air denser than 62% of the body's
-        // sea-level density, WingtipVortex's humidDensityMin, so both mods agree on where the
-        // air is moist), 16 K above it. Cooling a wing's air 10 K takes about an 11% pressure
-        // drop, which only a hard-pulled or near-transonic wing produces.
+        // KSP has no humidity, so the air's moisture is a placeholder, given as a dew-point spread
+        // rather than a relative humidity, which would make KSC's hot lowlands (305-308 K) muggy. A
+        // fixed spread keeps the dew point tracking the temperature. Humid boundary layer (air
+        // denser than 62% of the body's sea-level density, WingtipVortex's humidDensityMin) uses
+        // SurfaceSpread; above it FreeAirSpread.
         public static float SurfaceSpread = 12f, FreeAirSpread = 18f;   // K; settable for the offline checks
         public const float BoundaryLayerDensity = 0.62f;
 
-        // Where the vapor can exist at all: a HARD limit, by density relative to the body's
-        // sea-level density (so it means the same on every body). Wing vapor is a lower-troposphere
-        // effect: the air aloft holds almost no water, and a wing in thin air makes only a thin
-        // suction. In air thinner than this the mod does no work at all: no vapor, no part reads,
-        // no particle system, no log. (v0.4.8 ran whenever the surface speed was 5 m/s or more,
-        // which in orbit is always: a station of hundreds of parts was read every step and the log
-        // was written every second, and vapor still formed at 55 km.) About 14.3 km on
-        // Kerbin (measured from a flight log; the verbose log records each crossing).
+        // Where the vapor can exist at all: a hard limit by density relative to the body's
+        // sea-level density, so it means the same on every body (about 14.3 km on Kerbin). In
+        // thinner air the mod does no work at all.
         public const float CutoffRatio = 0.10f;
-        // Coming back down, the mod resumes at the cutoff exactly; going up, it stops a little
-        // past it, so a craft hovering on the limit does not clear and rebuild its vapor
-        // measurements every few steps.
+        // Coming down it resumes at the cutoff; going up it stops a little past it, so a craft
+        // hovering on the limit does not rebuild its measurements every few steps.
         public const float CutoffHysteresis = 0.9f;
 
         public static float RelativeHumidity(float rho, float rhoSeaLevel, float kelvin)
@@ -70,10 +49,9 @@ namespace VortexVapor
             return SaturationPressure(kelvin - spread) / SaturationPressure(kelvin);
         }
 
-        // Supersaturation e / e_sat of air that started at (T, p, RH) and has been sucked down by
-        // `suction` Pa; and the water that condenses out of it, g per kg of air. The vapour's share
-        // of the pressure is fixed, so what exceeds saturation at the new pressure and temperature
-        // condenses (the latent heat it releases is neglected, which overstates it slightly).
+        // Supersaturation e / e_sat of air that started at (T, p, RH) and was sucked down by
+        // `suction` Pa, and the water that condenses out of it, g per kg of air. Latent heat is
+        // neglected, which overstates it slightly.
         public static float Supersaturation(float kelvin, float pascal, float rh, float suction)
         {
             float e, es, pl;
@@ -107,46 +85,29 @@ namespace VortexVapor
 
         // Suction on the lifting side at chord fraction x (0 leading edge, 1 trailing edge), Pa,
         // for a section carrying a mean pressure difference `loading` at dynamic pressure q.
-        //
-        // Thin-airfoil theory splits a section's lift in two. Up to its ideal lift coefficient
-        // the camber carries it, spread smoothly along the chord, peaking mid-chord. Everything
-        // above that comes from angle of attack and piles into a suction peak at the leading
-        // edge, as sqrt((1 - x) / x) (the offset rounds off the singularity, as a real nose radius
-        // does). So the peak grows faster than the lift: a wing working near its limit, slow and
-        // hard-pulled, has a far sharper peak than the same load carried fast at a low lift
-        // coefficient. That is why vapor, like WingtipVortex's trails, comes most easily on a
-        // slow, high-alpha wing and needs more g the faster the aircraft goes. Compressibility
-        // (Prandtl-Glauert) sharpens the peak further toward Mach 1 without changing the lift,
-        // which stock's figure already includes, so it scales only the peak's excess over its
-        // mean.
+        // Thin-airfoil theory: up to its ideal lift coefficient the camber carries the lift, spread
+        // along the chord; the rest comes from angle of attack and piles into a leading-edge peak,
+        // sqrt((1 - x) / x). So a slow, high-alpha wing has a sharper peak than the same load
+        // carried fast. Prandtl-Glauert sharpens only the peak's excess over its mean.
         public const float IdealCL = 0.4f;    // typical light camber; KSP's stock wings are near flat
-        // The suction peak cannot grow without limit: past a peak pressure coefficient of a few,
-        // the boundary layer behind it separates and the wing stalls, and the peak collapses
-        // rather than deepening. KSP lets a wing carry far more lift than a real one (5 g at
-        // 70 m/s in flight logs), so without this a slow, hard-pulled wing got an impossible
-        // suction peak. Real airfoils reach Cp_min of about -3 to -6 at maximum lift; the
-        // incompressible limit is scaled by Prandtl-Glauert like the rest of the peak.
+        // The peak cannot grow without limit: past a peak pressure coefficient of a few the
+        // boundary layer separates and the peak collapses. KSP wings carry far more lift than real
+        // ones, so this caps it (real airfoils reach Cp_min of -3 to -6). Scaled by Prandtl-Glauert
+        // like the rest of the peak.
         public static float MaxPeakCp = 3.5f;
-        // The second ceiling, and the one that binds at speed. The air over the suction peak
-        // speeds up as the pressure falls, and past a local Mach of about 1.3-1.4 it ends in a
-        // shock strong enough to separate the boundary layer, which collapses the peak. So the
-        // deepest suction is the isentropic pressure drop from flight Mach to that local Mach:
-        //   Cp_max = (1 - ((1 + 0.2 M^2) / (1 + 0.2 Ml^2))^3.5) / (0.7 M^2)
-        // It FALLS with Mach (5.8 at M 0.4, 3.4 at M 0.5, 2.3 at M 0.6), where the stall cap
-        // scaled by Prandtl-Glauert rises (3.8, 4.0, 4.4). Using only that one let a 5 g pull at
-        // M 0.6 reach a pressure drop larger than the whole ambient pressure and condense nearly
-        // all the water in the air (20 g/kg in a flight log). Slow flight keeps the stall cap.
+        // The second ceiling, which binds at speed: past a local Mach of about 1.3-1.4 a shock
+        // separates the flow, so the deepest suction is the isentropic drop from flight Mach to
+        // that local Mach:
+        // Cp_max = (1 - ((1 + 0.2 M^2) / (1 + 0.2 Ml^2))^3.5) / (0.7 M^2)
+        // It falls with Mach (5.8 at M 0.4, 3.4 at 0.5, 2.3 at 0.6). Slow flight keeps the stall
+        // cap.
         public static float MaxLocalMach = 1.35f;
 
         // Deepest suction coefficient the section can carry at this flight Mach, computed once per
-        // step. Two tunings, picked by which aero model is flying the craft:
-        //
-        //   Stock: the stall ceiling alone, scaled by Prandtl-Glauert, as through 1.3.0. Stock's
-        //   lift is not tied to a real angle of attack, and the vapor onset under stock was tuned
-        //   in flight against this cap; the shock cap on top of it made stock vapor very hard to get.
-        //
-        //   FAR: the lower of that and the shock ceiling below. FAR flies the wing at a real angle
-        //   of attack and loads it to real lift coefficients, so the physical limit applies.
+        // step.
+        // Stock: the stall ceiling alone, scaled by Prandtl-Glauert; stock lift is not tied to a
+        // real angle of attack, and the onset was tuned against this cap.
+        // FAR: the lower of that and the shock ceiling, since FAR flies real angles of attack.
         public static float PeakCpCap(float mach, bool far)
         {
             return far ? PeakCpCapFAR(mach) : PeakCpCapStock(mach);
@@ -175,12 +136,9 @@ namespace VortexVapor
         }
 
         // With part of the loading carried by a deflected flap, aileron or elevator behind the
-        // leading edge. Thin-airfoil theory treats a flap deflection as a change of camber: its
-        // lift spreads along the chord (peaking at the hinge) rather than feeding the
-        // leading-edge suction peak the way angle of attack does. So a hard-deflected control
-        // surface loads its section without sharpening the peak where vapor forms first.
-        // Loadings are signed toward the suction side of the whole section; `flapLoading` may be
-        // negative (a flap working against the section).
+        // leading edge: a flap deflection is a camber change, spread along the chord, not an angle
+        // of attack feeding the leading-edge peak. Loadings are signed toward the suction side of
+        // the whole section; `flapLoading` may be negative.
         public static float Suction(float camberShape, float peakShape, float leadLoading, float flapLoading, float q, float pg, float cpCap)
         {
             float cl = leadLoading / Mathf.Max(q, 1f), clFlap = flapLoading / Mathf.Max(q, 1f);
@@ -190,13 +148,10 @@ namespace VortexVapor
             return q * Mathf.Min(cp, cpCap);
         }
 
-        // The per-point shapes depend only on geometry, so they are computed once per part and
-        // the per-step work is a few multiplies.
-        // The same physics, split in two so the per-sample work is a few multiplies. A section's
-        // loading fixes two terms for the whole strip; each sample then adds only its own shapes:
-        //   cp = camberTerm * camberShape + alphaTerm * peakAdjust
-        // where peakAdjust = max(0, 1 + (peakShape - 1) * pg) is Prandtl-Glauert's sharpening of
-        // the peak's excess over its mean. Identical to Suction(...) above.
+        // The per-point shapes depend only on geometry, so they are computed once per part. A
+        // section's loading fixes two terms for the strip, and each sample adds its own shapes: cp
+        // = camberTerm * camberShape + alphaTerm * peakAdjust, where peakAdjust = max(0, 1 +
+        // (peakShape - 1) * pg). Identical to Suction() above.
         public static void StripTerms(float leadLoading, float flapLoading, float q, out float camberTerm, out float alphaTerm)
         {
             float cl = leadLoading / Mathf.Max(q, 1f), clFlap = flapLoading / Mathf.Max(q, 1f);
@@ -244,9 +199,8 @@ namespace VortexVapor
         }
     }
 
-    // CondensedWater as a function of suction alone, for one ambient state: the ambient air is the
-    // same for every point of the airframe in a step, so the exponentials are worked out on a
-    // table once per step rather than once per point.
+    // CondensedWater as a function of suction alone, for one ambient state, worked out on a table
+    // once per step.
     public class CondensationTable
     {
         const int N = 256;

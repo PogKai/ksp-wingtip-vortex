@@ -3,27 +3,17 @@ using UnityEngine;
 
 namespace VortexVapor
 {
-    // Draws the wing vapor WingVapor computes: short-lived soft puffs over the points of every
-    // lifting part that are condensing, all in ONE particle system riding the vessel's root part
-    // (local simulation space). One system, not one per part: a 200-part craft would otherwise be
-    // 200 systems to update and 200 draw calls.
-    //
-    // Riding the craft works because wing vapor only lives for a chord or two of flight: it forms
-    // over the suction peak and evaporates once the pressure recovers past the trailing edge. So
-    // there is no floating-origin correction and no world-space trail to manage. The puffs drift
-    // aft, which draws the sheet streaming off the trailing edge. A control surface deflecting
-    // after a puff is born does not carry it along, which over 0.2 s does not show.
-    //
-    // Stock shaders only (no Unity Editor): KSP's alpha-blended particle shader, so the vapor
-    // reads as white cloud in sunlight rather than a glow, tinted down on the night side on the
-    // CPU. The puff texture is generated here, so there is no asset to ship or license.
+    // Draws the wing vapor WingVapor computes: short-lived soft puffs over the condensing points of
+    // every lifting part, all in one particle system riding the vessel's root part (local
+    // simulation space), so there is no floating-origin correction. Puffs drift aft, drawing the
+    // sheet streaming off the trailing edge. Stock shaders only; the puff texture is generated
+    // here.
     public class VaporRenderer
     {
         // Puffs per second per square metre of fully condensing wing.
         public const float PuffsPerSquareMetre = 450f;
-        // The whole craft's budget. A big craft in a hard pull would ask for far more; its puffs
-        // are then fewer and larger, covering the same area, so the look holds while the
-        // particle count and the overdraw (the GPU cost) stay bounded.
+        // The craft's budget: past it, puffs are fewer and larger, covering the same area, so
+        // particle count and overdraw stay bounded.
         public const float MaxPuffsPerSecond = 20000f;
         public const int MaxPuffs = 6000, MaxEmitPerFrame = 500;
         public const float MaxSizeBoost = 2f;
@@ -90,9 +80,8 @@ namespace VortexVapor
                 float sum = 0f;
                 for (int j = 0; j < pf.samples.Length; j++)
                 {
-                    // Square root: where the vapor is thin it still gets puffs (faint ones, see
-                    // PuffAlpha below), so the sheet spreads over the wing instead of crowding
-                    // the few densest samples.
+                    // Square root: thin vapor still gets (faint) puffs, so the sheet spreads over
+                    // the wing instead of crowding the densest samples.
                     sum += Mathf.Sqrt(f.density[j]) * pf.sampleShare[j];
                     src.weights[j] = sum;
                 }
@@ -124,27 +113,25 @@ namespace VortexVapor
                 float cell = Mathf.Sqrt(areaEach);
                 for (int k = 0; k < count; k++)
                 {
-                    // One pick per equal slice of the part's vapor, not independent draws: the
-                    // sheet then covers the wing evenly instead of clumping and leaving gaps.
+                    // One pick per equal slice of the part's vapor, not independent draws, so the
+                    // sheet covers the wing evenly.
                     int j = Pick(src.weights, (k + Random.value) / count * src.sum);
                     Vector2 q = pf.samples[j] + new Vector2(Random.Range(-0.5f, 0.5f), Random.Range(-0.5f, 0.5f)) * cell;
                     float side = f.sampleSide[j];
                     float life = Random.Range(MinLife, MaxLife);
                     float drift = f.sectionChord[j] * (1f - f.chordFrac[j] + PastTrailingEdge);
-                    // Thin vapor is faint and fine-grained, not a few opaque blobs: opacity and size
-                    // both grow with density, so the first trace of condensation reads as a haze
-                    // along the leading edge and thickens smoothly (v0.4.5: isolated puffs on the
-                    // A300's tail at onset looked like artifacts).
+                    // Thin vapor is faint and fine-grained: opacity and size both grow with
+                    // density, so condensation reads as a haze along the leading edge and thickens
+                    // smoothly.
                     float d = f.density[j];
                     Color c = tint;
                     c.a = PuffAlpha * Mathf.Lerp(0.08f, 1f, d);
                     float grain = Mathf.Lerp(0.45f, 1f, d);
                     float size = Mathf.Clamp(cell * Random.Range(1.6f, 2.6f) * sizeBoost * grain, 0.15f, 3f * sizeBoost);
-                    // Vapor forms on the suction (upper) surface only. A puff is a disc as wide as
-                    // 3 m centred on its position, so centred on the skin it would hang half below
-                    // the wing. Instead it starts resting on the skin (centre one start-radius up)
-                    // and rises at exactly the rate its radius grows (SizeStart..SizeEnd), so its
-                    // lower edge stays on the surface for its whole life.
+                    // Vapor forms on the suction (upper) surface only. A puff starts resting on the
+                    // skin (centre one start-radius up) and rises at the rate its radius grows
+                    // (SizeStart..SizeEnd), so its lower edge stays on the surface for its whole
+                    // life.
                     float rise = 0.5f * size * (SizeEnd - SizeStart) / life;
                     Vector3 world = fr.ToWorld(q) + fr.n * (side * (0.5f * pf.thickness + 0.5f * size * SizeStart));
                     Vector3 vel = down * (drift / life) + fr.n * (side * rise);

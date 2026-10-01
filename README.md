@@ -79,6 +79,7 @@ Both effects are limited by air density, not height, so the limits fall at a dif
 | [How it works](docs/how-it-works.md) | The physics behind the vortices and the wake |
 | [Wing vapor](docs/wing-vapor.md) | How it forms, what to expect, and its limits |
 | [Troubleshooting](docs/troubleshooting.md) | Logs, known issues, and how to report a problem |
+| [Design notes](docs/design-notes.md) | The reasoning behind the code, moved out of its comments |
 | [Changelog](CHANGELOG.md) | Every release |
 
 <br>

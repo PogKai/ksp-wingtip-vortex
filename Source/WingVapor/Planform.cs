@@ -22,12 +22,8 @@ namespace VortexVapor
     }
 
     // A lifting part's outline in its own plane: the convex hull of its mesh, in metres, about the
-    // centre of its bounds. Measured once per part. Pure geometry, so it can be checked offline.
-    //
-    // It exists because a wing in KSP is usually many parts, often clipped into each other, and
-    // stock gives every one of them lift for its full area. Two panels stacked in the same place are
-    // one piece of wing, not two, and the samples below are how the model finds out which area is
-    // shared (see PlanformOverlap).
+    // centre of its bounds. Measured once per part. Pure geometry. The samples find which area is
+    // shared between stacked or clipped parts (see PlanformOverlap).
     public class Planform
     {
         public Vector2[] hull;          // counter-clockwise
@@ -175,15 +171,13 @@ namespace VortexVapor
         }
     }
 
-    // Which area of the airframe's lifting surfaces is shared. Every sample of every planform is
-    // tested against every other planform; a sample covered by m planforms in all gives each of
-    // them 1/m of its area. Stacked duplicates therefore add up to one surface, a part partly
-    // overlapping another gives up only the overlapped area, and a flap butted against a wing
-    // (touching, not overlapping) keeps all of its own.
+    // Which area of the airframe's lifting surfaces is shared: a sample covered by m planforms
+    // gives each 1/m of its area. Stacked duplicates add up to one surface, and a flap butted
+    // against a wing keeps all of its own.
     public static class PlanformOverlap
     {
         // Two surfaces closer than this along their normals, or than their own thickness, are the
-        // same piece of wing. Further apart they are a biplane and both lift.
+        // same piece of wing; further apart they are a biplane.
         public const float MinSlab = 0.3f;
 
         public static void Compute(List<Planform> forms, List<PlaneFrame> frames)

@@ -8,13 +8,10 @@ namespace VortexVapor
     {
         static readonly Dictionary<Type, bool> missileTypes = new Dictionary<Type, bool>();
 
-        // A fired missile: a craft carrying one of BDArmory's missile modules (anything derived
-        // from MissileBase) and no weapon manager. The weapon manager is what separates it from an
-        // aircraft with missiles still on its rails, which carries both.
-        //
-        // BDArmory moves the active vessel onto a missile to follow it, so without this the wing
-        // vapor followed the camera off the aircraft that fired it, and the vortex manager spent
-        // a controller slot on it.
+        // A fired missile: a craft with a BDArmory missile module (derived from MissileBase) and no
+        // weapon manager, which separates it from an aircraft with missiles on its rails. BDArmory
+        // makes the active vessel a missile to follow it, so the vapor and the vortex manager must
+        // skip it.
         public static bool IsMissile(Vessel v)
         {
             if (v == null || v.parts == null) return false;

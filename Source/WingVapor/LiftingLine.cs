@@ -3,27 +3,14 @@ using UnityEngine;
 
 namespace VortexVapor
 {
-    // Prandtl's lifting line over the airframe's panels, which stock aerodynamics leaves out: in
-    // stock every part lifts as if it were alone in the flow, so nothing feels its neighbours'
-    // downwash, and loading steps at every joint and never falls off toward a tip.
-    //
-    // Each panel is one horseshoe. Thin-airfoil theory gives Gamma = pi c V alpha, and an induced
-    // velocity v changes alpha by (v . l)/V, l being the panel's lift direction. So
-    //
-    //     Gamma_i = Gamma2D_i + pi c_i (v_i . l_i)
-    //
-    // where v_i is induced by every trailing line of the structure the panel belongs to. The
-    // trailing lines start at the lifting line, so each induces half what an infinite line would.
-    // It is taken averaged over the panel's span rather than at its midpoint, because a trailing
-    // line can pass through the middle of a long panel (a flap edge, say). That average has a
-    // closed form, finite everywhere except exactly on the line.
-    //
-    // The system is linear in Gamma, so it is factorised once when the geometry or flow direction
-    // is refreshed and back-substituted every step. Afterwards each connected structure is scaled
-    // back to its stock lift: stock's total is what actually holds the aircraft up, and the wake
-    // has to carry exactly that. Only the spanwise distribution comes from here.
-    //
-    // Pure math on plain arrays, so it can be checked offline against textbook wings.
+    // Prandtl's lifting line over the airframe's panels, which stock aerodynamics leaves out (every
+    // part lifts as if alone in the flow).
+    // Each panel is one horseshoe: Gamma_i = Gamma2D_i + pi c_i (v_i . l_i), where v_i is induced
+    // by every trailing line of its structure, averaged over the panel's span (a closed form). The
+    // system is linear in Gamma, so it is factorised when the geometry or flow direction is
+    // refreshed and back-substituted every step. Each connected structure is then scaled back to
+    // its stock lift; only the spanwise distribution comes from here.
+    // Pure math on plain arrays, so it can be checked offline.
     public class LiftingLine
     {
         double[] lu = new double[0];
@@ -103,8 +90,7 @@ namespace VortexVapor
         }
 
         // Solves for Gamma from Gamma2D, then scales each connected structure back to its stock
-        // lift. Falls back to stock's own loading if not factored or if the answer is implausible,
-        // so the lift the wake carries is never lost.
+        // lift. Falls back to stock's loading if not factored or if the answer is implausible.
         public void Solve(int np, float[] g2D, float[] gStock, float[] halfSpan, Vector3[] span, Vector3 down, float[] gamma)
         {
             if (!factored || np != size)
@@ -149,10 +135,9 @@ namespace VortexVapor
                 absStock[comp[i]] += Mathf.Abs(w * gStock[i]);
                 absSolved[comp[i]] += Mathf.Abs(w * gamma[i]);
             }
-            // Per structure: the lifting-line answer if it is plausible, else shared area alone,
-            // else stock's own loading. Plausible means it needs a sane scale to reach stock's lift
-            // and, once scaled, holds no more total circulation than stock's (1.5x): induction
-            // redistributes and reduces loading, it does not pump up opposing panels that cancel.
+            // Per structure: the lifting-line answer if plausible, else shared area alone, else
+            // stock's loading. Plausible means a sane scale to reach stock's lift and no more than
+            // 1.5x stock's total circulation.
             Fallbacks = 0;
             for (int c = 0; c < np; c++)
             {
@@ -184,11 +169,9 @@ namespace VortexVapor
         int[] mode = new int[0];
 
         // Normal-to-lift velocity per unit circulation of a semi-infinite trailing line at gPos
-        // (core a), averaged over the panel's span. With sigma along the span from the panel's
-        // centre and H the line's offset from the span line (softened by the core):
-        //   (1 / 2hs) * integral (sigma - sg) / ((sigma - sg)^2 + H^2) dsigma, over [-hs, hs]
-        //   = ln(((hs - sg)^2 + H^2) / ((hs + sg)^2 + H^2)) / (4 hs)
-        // times 1/(4 pi). Positive means upwash along l = down x span.
+        // (core a), averaged over the panel's span: ln(((hs - sg)^2 + H^2) / ((hs + sg)^2 + H^2)) /
+        // (4 hs), times 1/(4 pi), with sg along the span from the panel's centre and H the line's
+        // offset from the span line. Positive means upwash along l = down x span.
         public static double Kernel(Vector3 center, Vector3 span, float halfSpan, Vector3 gPos, float core, Vector3 down)
         {
             Vector3 d = gPos - center;

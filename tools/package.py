@@ -17,6 +17,8 @@ then reads the zip back and checks that the DLL inside is the one just built. Re
 
   * the version in Source/WingtipVortex.cs (ModVersion), in the local project's AssemblyInfo.cs and
     in the top heading of CHANGELOG.md disagree, or the top heading is still "Unreleased",
+  * the KSPAssembly attribute in Source/WingtipVortex.cs, which companion mods depend on, does not
+    carry that version's major and minor,
   * tracked files have uncommitted changes (unless --allow-dirty), so a release is always a commit,
   * the local project's copy of WingtipVortex.cs has drifted from Source/WingtipVortex.cs.
 
@@ -59,6 +61,10 @@ def main():
     if not (found[0] and found[0] == found[1] == found[2]) or not re.fullmatch(r"\d+\.\d+\.\d+", found[0] or ""):
         sys.exit("versions must agree and be numeric: ModVersion %s, AssemblyInfo %s, top of CHANGELOG %s" % tuple(found))
     version = found[0]
+
+    ksp = re.search(r'KSPAssembly\("%s", (\d+), (\d+)\)' % NAME, read(os.path.join(ROOT, "Source", "WingtipVortex.cs")))
+    if not ksp or version.split(".")[:2] != list(ksp.groups()):
+        sys.exit("the KSPAssembly attribute in Source/WingtipVortex.cs must carry %s's major and minor" % version)
 
     if read(os.path.join(ROOT, "Source", "WingtipVortex.cs")) != read(os.path.join(ROOT, "WingtipVertex", "WingtipVortex.cs")):
         sys.exit("WingtipVertex/WingtipVortex.cs differs from Source/WingtipVortex.cs: bring them in step first")

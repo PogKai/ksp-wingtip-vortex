@@ -26,6 +26,16 @@ namespace VortexVapor
         // A puff's size over its life, as a multiple of its start size.
         public const float SizeStart = 0.7f, SizeEnd = 1.5f;
 
+        // A companion mod can draw the vapor in place of the puffs.
+        public interface IDrawer
+        {
+            // Draws this frame's vapor; false leaves it to the puffs. `scale` is the player's
+            // intensity.
+            bool Draw(List<Source> active, Vessel vessel, Vector3 down, Color tint, float scale, float dt);
+            void Clear();
+        }
+        public static IDrawer Drawer;
+
         public class Source
         {
             public Part part;
@@ -37,7 +47,6 @@ namespace VortexVapor
 
         readonly Dictionary<long, Source> sources = new Dictionary<long, Source>();
         readonly List<Source> active = new List<Source>();
-        readonly VaporVolume volume = new VaporVolume();
         GameObject go;
         ParticleSystem ps;
         Part root;
@@ -95,13 +104,7 @@ namespace VortexVapor
                 wanted += sum * (pf.area / pf.samples.Length) * PuffsPerSquareMetre;
                 active.Add(src);
             }
-            // With Waterfall installed the vapor is drawn as volumetric cloud, and no puffs.
-            if (ModSettings.VaporVolumetric && VaporVolume.Available)
-            {
-                volume.Update(active, vessel, down, tint, userScale, ModSettings.VaporThickness, dt);
-                return;
-            }
-            volume.Hide();
+            if (Drawer != null && Drawer.Draw(active, vessel, down, tint, userScale, dt)) return;
             if (active.Count == 0) return;
 
             float scale = wanted > MaxPuffsPerSecond ? MaxPuffsPerSecond / wanted : 1f;
@@ -265,7 +268,7 @@ namespace VortexVapor
             go = null;
             ps = null;
             root = null;
-            volume.Clear();
+            if (Drawer != null) Drawer.Clear();
             sources.Clear();
         }
     }

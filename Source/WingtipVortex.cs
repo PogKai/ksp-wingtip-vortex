@@ -3,11 +3,14 @@ using KSP;
 using System.Collections;
 using System.Collections.Generic;
 
+// The name and version a companion mod depends on (KSPAssemblyDependency).
+[assembly: KSPAssembly("WingtipVortex", 1, 5)]
+
 // One per craft, created and destroyed by WingtipVortexManager and bound to that craft for its
 // whole life.
 public class WingtipVortex : MonoBehaviour
 {
-    public const string ModVersion = "1.4.1";
+    public const string ModVersion = "1.5.0";
 
     // The craft this controller draws. Set by the manager immediately after AddComponent, which
     // is before Start() runs.

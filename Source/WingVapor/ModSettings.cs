@@ -15,8 +15,13 @@ namespace VortexVapor
         public const float MaxIntensity = 2f;
 
         static bool loaded;
-        static bool vortexOn = true, vaporOn = true, vaporVolumetric = true;
-        static float vortexIntensity = 1f, vaporIntensity = 1f, vaporThickness = 1f;
+        static bool vortexOn = true, vaporOn = true;
+        static float vortexIntensity = 1f, vaporIntensity = 1f;
+
+        // For a companion mod: rows drawn under the wing vapor's (the argument is whether the
+        // vapor is on), and a call when the player resets to defaults.
+        public static Action<bool> VaporRows;
+        public static Action Defaults;
 
         // Set by the setters; the window saves shortly after the last change.
         public static bool Dirty;
@@ -27,12 +32,8 @@ namespace VortexVapor
         public static float VaporScale { get { Ensure(); return vaporOn ? vaporIntensity : 0f; } }
 
         public static bool VortexOn { get { Ensure(); return vortexOn; } set { Ensure(); if (vortexOn != value) { vortexOn = value; Touch(); } } }
-        // Draw the vapor as volumetric clouds (VaporVolume) when Waterfall is installed.
-        public static bool VaporVolumetric { get { Ensure(); return vaporVolumetric; } set { Ensure(); if (vaporVolumetric != value) { vaporVolumetric = value; Touch(); } } }
         public static bool VaporOn { get { Ensure(); return vaporOn; } set { Ensure(); if (vaporOn != value) { vaporOn = value; Touch(); } } }
         public static float VortexIntensity { get { Ensure(); return vortexIntensity; } set { Ensure(); value = Clamp(value); if (vortexIntensity != value) { vortexIntensity = value; Touch(); } } }
-        // Scales how far the volumetric cloud stands off the wing (VaporVolume.CloudHeightChords).
-        public static float VaporThickness { get { Ensure(); return vaporThickness; } set { Ensure(); value = Clamp(value); if (vaporThickness != value) { vaporThickness = value; Touch(); } } }
         public static float VaporIntensity { get { Ensure(); return vaporIntensity; } set { Ensure(); value = Clamp(value); if (vaporIntensity != value) { vaporIntensity = value; Touch(); } } }
 
         static float Clamp(float v) { return Mathf.Clamp(v, 0f, MaxIntensity); }
@@ -41,9 +42,10 @@ namespace VortexVapor
         public static void ResetToDefaults()
         {
             Ensure();
-            vortexOn = vaporOn = vaporVolumetric = true;
-            vortexIntensity = vaporIntensity = vaporThickness = 1f;
+            vortexOn = vaporOn = true;
+            vortexIntensity = vaporIntensity = 1f;
             Touch();
+            if (Defaults != null) Defaults();
         }
 
         static void Ensure()
@@ -58,10 +60,8 @@ namespace VortexVapor
                 if (node == null) return;
                 vortexOn = ReadBool(node, "vortexEnabled", true);
                 vaporOn = ReadBool(node, "vaporEnabled", true);
-                vaporVolumetric = ReadBool(node, "vaporVolumetric", true);
                 vortexIntensity = Clamp(ReadFloat(node, "vortexIntensity", 1f));
                 vaporIntensity = Clamp(ReadFloat(node, "vaporIntensity", 1f));
-                vaporThickness = Clamp(ReadFloat(node, "vaporThickness", 1f));
             }
             catch (Exception e) { Debug.Log("[VORTEX] settings: could not read, using defaults: " + e.Message); }
         }
@@ -77,10 +77,8 @@ namespace VortexVapor
                 var node = new ConfigNode("WingtipVortexSettings");
                 node.AddValue("vortexEnabled", vortexOn.ToString());
                 node.AddValue("vaporEnabled", vaporOn.ToString());
-                node.AddValue("vaporVolumetric", vaporVolumetric.ToString());
                 node.AddValue("vortexIntensity", vortexIntensity.ToString("F2", CultureInfo.InvariantCulture));
                 node.AddValue("vaporIntensity", vaporIntensity.ToString("F2", CultureInfo.InvariantCulture));
-                node.AddValue("vaporThickness", vaporThickness.ToString("F2", CultureInfo.InvariantCulture));
                 node.Save(path);
             }
             catch (Exception e) { Debug.Log("[VORTEX] settings: could not save: " + e.Message); }
@@ -196,11 +194,7 @@ namespace VortexVapor
             GUILayout.Space(6f);
             ModSettings.VaporOn = GUILayout.Toggle(ModSettings.VaporOn, " Wing vapor");
             ModSettings.VaporIntensity = IntensityRow("Intensity", ModSettings.VaporIntensity, ModSettings.VaporOn);
-            ModSettings.VaporThickness = IntensityRow("Thickness", ModSettings.VaporThickness, ModSettings.VaporOn && ModSettings.VaporVolumetric && VaporVolume.Available);
-            if (VaporVolume.Available)
-                ModSettings.VaporVolumetric = GUILayout.Toggle(ModSettings.VaporVolumetric, " Volumetric cloud (Waterfall)");
-            else
-                GUILayout.Label("Volumetric cloud needs Waterfall installed.");
+            if (ModSettings.VaporRows != null) ModSettings.VaporRows(ModSettings.VaporOn);
             GUILayout.Space(8f);
 
             GUILayout.BeginHorizontal();
@@ -215,7 +209,7 @@ namespace VortexVapor
         }
 
         // 0 to MaxIntensity in 5% steps, snapping to 100%; greyed out while its effect is off.
-        static float IntensityRow(string label, float value, bool enabled)
+        public static float IntensityRow(string label, float value, bool enabled)
         {
             bool wasEnabled = GUI.enabled;
             GUI.enabled = wasEnabled && enabled;

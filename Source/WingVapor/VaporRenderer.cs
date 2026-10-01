@@ -60,6 +60,10 @@ namespace VortexVapor
             // Nothing condensing (the usual case, and always above the vapor's altitude): no work,
             // and no particle system on the vessel.
             if (WingVapor.Fields.Count == 0) { if (go != null) Clear(); return; }
+            // The player's intensity dial (ModSettings): it scales how opaque the puffs are, not
+            // how many there are, so the cloud thins evenly instead of going sparse. Off at zero.
+            float userScale = ModSettings.VaporScale;
+            if (userScale <= 0.01f) { if (go != null) Clear(); return; }
             EnsureMaterial();
             EnsureSystem(vessel.rootPart);
             // WingtipVortex's night floor: 0.2 of daylight brightness in full shadow.
@@ -133,7 +137,7 @@ namespace VortexVapor
                     // along the leading edge and thickens smoothly (v0.4.5: isolated puffs on the
                     // A300's tail at onset looked like artifacts).
                     float d = f.density[j];
-                    c.a = PuffAlpha * Mathf.Lerp(0.08f, 1f, d);
+                    c.a = Mathf.Clamp01(PuffAlpha * userScale * Mathf.Lerp(0.08f, 1f, d));
                     float grain = Mathf.Lerp(0.45f, 1f, d);
                     var ep = new ParticleSystem.EmitParams
                     {

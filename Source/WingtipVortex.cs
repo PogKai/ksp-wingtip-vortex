@@ -4155,6 +4155,11 @@ public class WingtipVortex : MonoBehaviour
                 }
             }
 
+            // The player's intensity dial (VortexVapor.ModSettings), applied last so it scales what
+            // every gate above decided rather than moving any of their thresholds. Zero when the
+            // effect is switched off: new rope stops being laid and what is in the air ages out.
+            visible *= VortexVapor.ModSettings.VortexScale;
+
             // Record what is being shed right now. ApplyShedAppearance replays this along the
             // trail so each stretch of it renders at the strength it was actually born with.
             shedHistory[i][shedWrite] = visible;

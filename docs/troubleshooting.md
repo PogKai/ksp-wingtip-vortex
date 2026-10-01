@@ -10,6 +10,7 @@ Search `KSP.log` for `[VORTEX]`. The mod logs its full selection pass, including
 
 ## No vortices showing
 
+* Check the in-game settings (app launcher button, or Alt+V): the vortices may be switched off or turned down. Reset puts both effects back to 100%. The choices live in `PluginData/settings.cfg` in the mod's folder, and deleting that file restores the defaults
 * Ensure your craft has lifting or control surfaces
 * Ensure the craft is airborne: vortices are suppressed on the ground by design
 * Check the measurement line: `[VORTEX] [<craft>] measured: span=... mass=... sizeFactor=...`. Every line is tagged with the craft it is about, since other aircraft log too. A wildly wrong span means a mod's renderer got past the bounds filter; the log will name it

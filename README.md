@@ -51,6 +51,7 @@ KSP 1.12.x · no dependencies · to upgrade, replace the folder · to remove, de
 
 * Works with **stock aerodynamics** or **Ferram Aerospace Research** (tested with FAR 0.16.2), detected automatically
 * Works alongside Scatterer, EVE, Parallax, Deferred, Singularity and Kopernicus
+* **In-game settings:** in flight, click the vortex button on the app launcher (or press **Alt+V**) to switch the wingtip vortices and the wing vapor on or off and set each one's intensity from 0 to 200%. 100% is the default look. Choices are saved to `PluginData/settings.cfg` in the mod's folder
 
 <br>
 

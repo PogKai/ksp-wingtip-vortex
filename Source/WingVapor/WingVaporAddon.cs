@@ -163,6 +163,15 @@ namespace VortexVapor
                 return;
             }
 
+            // Switched off in the settings window: no loading or condensation solve at all, so
+            // the effect costs nothing. Clearing the fields also lets the renderer tear down.
+            if (ModSettings.VaporScale <= 0.01f)
+            {
+                if (WingVapor.Fields.Count > 0) WingVapor.Clear();
+                vaporPending = false;
+                return;
+            }
+
             Vector3 velocity = vessel.GetSrfVelocity();
             float speed = velocity.magnitude;
             float rho = (float)vessel.atmDensity;

@@ -4,6 +4,24 @@ All notable changes to KSP Wingtip Vortex.
 
 ---
 
+## Unreleased
+
+### Fixed
+
+* **The vortex rope zigzagged in a hard pull, seen from the side.** Each frame lays several rings
+  between the last frame's position and the wingtip, and the rope's inward curve was aimed
+  separately for each of them. Behind the tip the flight path is angle-of-attack off the
+  airframe's axis, so every frame's rings were tipped toward the belly by an amount that reset
+  each frame: a sawtooth as wide as the rope, growing with speed and angle of attack, so it
+  showed in every 7+ g pull. The direction is now taken once per frame at the wingtip and
+  blended across the rings in between. 1.4.0's rigid-anchor fix removed wing flex, but not this.
+* **Spiral breakdown re-wound every frame at jet speed.** Its phase was recomputed from the whole
+  flight's distance against a wavelength that moves slightly with frame time, so any spiral
+  already drawn jumped to a random phase every frame. The phase is now set when each stretch of
+  rope is laid.
+
+---
+
 ## 1.4.0 — FAR
 
 Ferram Aerospace Research is now supported. Under FAR the vortices and the wing vapor read FAR's

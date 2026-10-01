@@ -34,6 +34,8 @@ CSPROJ = os.path.join(ROOT, "WingtipVertex", "WingtipVertex.csproj")
 DIST = os.path.join(ROOT, "dist")
 BUILD = os.path.join(DIST, "build")
 NAME = "WingtipVortex"
+# Docs that live in the repository but are not shipped in the zip.
+REPO_ONLY_DOCS = {"design-notes.md"}
 
 
 def read(path):
@@ -80,7 +82,7 @@ def main():
     for sub in ("docs", os.path.join("docs", "images")):
         folder = os.path.join(ROOT, sub)
         for name in sorted(os.listdir(folder)):
-            if os.path.isfile(os.path.join(folder, name)):
+            if os.path.isfile(os.path.join(folder, name)) and name not in REPO_ONLY_DOCS:
                 files[root + sub.replace(os.sep, "/") + "/" + name] = os.path.join(folder, name)
     files[root + "Source/WingtipVortex.cs"] = os.path.join(ROOT, "Source", "WingtipVortex.cs")
     vapor = os.path.join(ROOT, "Source", "WingVapor")

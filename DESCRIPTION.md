@@ -28,72 +28,18 @@ The result adapts to Kerbin, Eve, Duna, Kopernicus planets, rescaled systems and
 
 ## Features
 
-- **Wingtip vortices on every aircraft**
-  - Twin vortex ropes curl in behind the wingtips, stronger the harder the wing is working
-  - Drawn on your craft **and on every loaded aircraft around you**, including AI wingmen and BDArmory opponents (the ten nearest craft with lifting surfaces)
-  - Switching vessels does not touch any wake: each craft owns its trails
-  - Works on multi-part wings, canards and rockets
-
-- **Circulation-based vortex strength**
-  - Uses actual lift from individual lifting surfaces
-  - Accounts for airspeed and atmospheric density
-  - Allows strong vortices during low-speed, high-lift conditions such as landing approaches
-  - No arbitrary minimum G-force requirement
-
-- **Wing vapor**
-  - The white sheet over the wings in a hard pull, worked out from the physics of the air over each wing section (pressure drop, cooling, dew point) rather than from triggers
-  - Deliberately hard to get: a fighter needs a real pull in humid low air, an airliner shows a faint trace at most, and takeoff rolls, cruise and slow approaches show nothing
-  - Formed on the upper (suction) side of the wing only, and thinner toward the tips
-  - Optional volumetric cloud through the separate [Volumetric Wing Vapor](https://github.com/PogKai/ksp-volumetric-wing-vapor) add-on
-
-- **Realistic wake physics**
-  - **Viscous core growth:** a heavy aircraft's wake stays a tight rope, a light one goes soft in seconds
-  - **Ground effect:** behind a low pass the two ropes splay apart instead of running parallel
-  - **Vortex breakdown:** a heavily loaded core can kink into a short spiral or burst into a bulge, then disperse
-  - Vortices start as a thin, faint thread at the wingtip and build to full width and brightness as the core rolls up
-
-- **Atmosphere-driven contrails**
-  - Based on ambient temperature rather than altitude, using each body's own temperature curve
-  - Air density controls formation and fade behavior
-  - High-altitude contrails spread wide and soft toward the end of the trail, like a real contrail once its vortex pair breaks up
-  - Automatically adapts to different planets and atmospheric configurations
-
-- **Procedural main vortex meshes**
-  - Main wingtip vortices are rendered as curved procedural tubes that curve inward under mutual induction
-  - Secondary lifting surfaces use trails, with short wakes, since a canard vortex is absorbed into the wing's own vortex system
-  - No particle systems for the vortices
-  - A smooth wake in hard pulls: the wake follows the rigid airframe, not the flexing wingtip part
-
-- **Automatic lifting-surface detection**
-  - Finds the most relevant lifting surfaces on the aircraft, in the craft's own frame, so banked or air-spawned craft measure the same as level ones
-  - Handles multi-part wings without creating duplicate main vortices
-  - Supports canards and canted lifting surfaces
-  - Can recognize an outboard canard as the effective wingtip
-
-- **In-game settings**
-  - Click the vortex button on the app launcher in flight, or press **Alt+V**
-  - Switch the wingtip vortices and the wing vapor on or off and set each one's intensity from 0 to 200% (100% is the default look)
-  - Saved to `PluginData/settings.cfg` in the mod's folder; delete that file to restore the defaults
-
-- **Dynamic flight behavior**
-  - Vortices strengthen and fade smoothly with aerodynamic load
-  - Stable during aggressive pitch and roll maneuvers
-  - No vortices while parked or during the takeoff roll, when the wings are not supporting the aircraft
-  - Smooth transitions between atmospheric conditions
-
-- **Planet-aware illumination**
-  - Vortices and wing vapor are white in sunlight and dim on the night side, fading through twilight by the sun's height above the craft's horizon
-  - Illumination is normalized for different celestial bodies
-
-- **Modded-install support**
-  - Works alongside Scatterer, EVE, Parallax, Deferred, Singularity and Kopernicus
-  - Protected against oversized visual-effect mesh bounds corrupting aircraft measurements
-  - Designed to work naturally with Kopernicus and rescaled systems
-
-- **Low overhead**
-  - No particle systems for the vortices; one capped particle system per aircraft for the wing vapor
-  - Effects are generated only where required, and nothing runs in the vacuum of space
-  - Automatic cleanup on vessel and scene changes
+- **Vortices on every aircraft:** twin ropes curl in behind the wingtips, stronger the harder the wing works. Drawn on your craft and the ten nearest others, AI wingmen and BDArmory opponents included. Works on multi-part wings, canards and rockets
+- **Circulation-based strength:** driven by real per-surface lift, airspeed and air density, so a slow, high-lift landing approach vortexes at 1 G. No minimum G requirement
+- **Wing vapor:** the white sheet over the wings in a hard pull, worked out from the pressure drop, cooling and dew point over each wing section. Deliberately hard to get. Optional volumetric cloud via the [Volumetric Wing Vapor](https://github.com/PogKai/ksp-volumetric-wing-vapor) add-on
+- **Wake physics:** viscous core growth, ground effect, and vortex breakdown (spiral or bubble), with a wake that starts as a thin, faint thread and builds up
+- **Atmosphere-driven contrails:** based on each body's own ambient temperature and air density, not altitude, and spreading wide and soft toward their end
+- **Procedural tube meshes:** main vortices curve inward under mutual induction; canards use short trails; no particle systems for the vortices
+- **Automatic wing detection:** handles multi-part wings, canards and canted surfaces without duplicate vortices, and measures each craft in its own frame
+- **In-game settings:** app launcher button or **Alt+V** to switch each effect on or off and set its intensity from 0 to 200%. Saved to `PluginData/settings.cfg`
+- **Smooth, stable flight behavior:** fades with load, steady in hard maneuvers, none while parked or on the takeoff roll
+- **Planet-aware lighting:** white in sunlight, dimmed at night, normalized across bodies
+- **Modded-install support:** works with Scatterer, EVE, Parallax, Deferred, Singularity and Kopernicus, and ignores oversized effect-mesh bounds
+- **Low overhead:** effects are generated only where needed, nothing runs in space, and everything cleans up on vessel and scene changes
 
 ---
 

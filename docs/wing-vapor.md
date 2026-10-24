@@ -4,7 +4,7 @@
 
 The white sheet that forms over a fighter's wings in a hard pull, worked out from the physics of the air rather than from a list of triggers.
 
-**On this page:** [How real wing vapor forms](#how-real-wing-vapor-forms) · [What the mod calculates](#what-the-mod-calculates) · [What you see](#what-you-see) · [Limits, on purpose](#limits-on-purpose) · [Performance](#performance) · [Source](#source)
+**On this page:** [How real wing vapor forms](#how-real-wing-vapor-forms) · [How the mod draws it](#how-the-mod-draws-it) · [What you see](#what-you-see) · [Limits, on purpose](#limits-on-purpose) · [Legacy puffs](#legacy-puffs) · [Source](#source)
 
 ---
 
@@ -12,41 +12,36 @@ The white sheet that forms over a fighter's wings in a hard pull, worked out fro
 
 Air flowing over the top of a wing drops in pressure, and because it does so too quickly to exchange heat it also cools. If it cools below its dew point, the water in it condenses into cloud, which vanishes again once the air passes the wing and the pressure recovers. Nobody switched an effect on: it is just what humid air does over a hard-working wing.
 
-## What the mod calculates
+## How the mod draws it
 
-For every lifting part, every physics step:
+Since 2.0 the vapor is a **raymarched volume**: a port of the wing vapor in [aeronautic](https://github.com/Romainlg29/aeronautic) by Romain Le Gall (MIT), fitted to KSP.
 
-1. **How hard the part is working.** Its lift, corrected for the other parts around it. A wing built from many parts, clipped parts and stacked parts are treated as the one wing they form, and control surfaces are part of the section they sit in
-2. **How that load is spread along the chord.** Smoothly with the camber, and piled into a suction peak just behind the leading edge as the angle of attack grows (sharpened toward Mach 1)
-3. **How much the air cools** going through that pressure drop, from the local pressure and temperature
-4. **How much of the water it holds condenses out.** That is the vapor
+1. **The airframe is measured** when you start flying: each wing's planform, strakes (LEX), canards and the fuselage, from the craft's own parts and meshes. Missiles and stores under the wings are left out
+2. **Every frame the mod works out the pressure drop** over each wing station from the load, the angle of attack and the Mach number, and how much the humid air cools through it
+3. **The GPU marches through that field** in a box around the aircraft and draws the cloud wherever the air is cold enough to condense, lit by the sun (warm at sunrise and sunset, dimmed at night)
 
 ## What you see
 
-* A thin haze along the leading edge first, spreading back over the top of the wing as the pull tightens, thinner toward the tips
-* **It is hard to get.** A passenger jet at its structural limit shows a faint trace at most. A fighter needs a real pull in humid air. A takeoff roll, cruise or a slow approach shows nothing
-* Slow, hard-working wings condense sooner than fast ones at the same load, and wings near Mach 1 sooner still, as real ones do
-* Different on each wing in a bank
-* White in sunlight and dimmed on the night side, fading through twilight by the sun's height above the craft's horizon, so a high craft stays lit after the ground goes dark. Eclipses are handled
-* Parts buried inside a fuselage or an engine nacelle make no vapor
+* **A sheet over the wings** that stands up from the skin as the pull tightens, thin toward the tips and even across the span
+* **LEX ropes** on aircraft with strakes: a cord of vapor from the strake's vortex, flowing straight back along the airframe
+* **Over the fuselage** in the hardest pulls, the sheet spreads across the body between the wing roots
+* **Cobras and high angle of attack** condense from the angle the wing actually meets the air, not only from g
+* **On other aircraft too**: up to three aircraft within 2 km of the camera (formations, AI wingmen, BDArmory opponents) get their own vapor
+* **It is hard to get.** A fighter needs a real pull in the lower atmosphere; cruise, a takeoff roll or a slow approach show nothing
 
 ## Limits, on purpose
 
-* **Lower atmosphere only.** Air thinner than 10% of the body's sea-level density (about 14 km on Kerbin) has a hard cutoff: no vapor, and the wing-vapor code does no work at all, so orbit and space stations cost nothing
-* **A surface lifting against the aircraft's net lift makes no vapor**: a tailplane trimming the aircraft, a canard set against the wing. KSP loads these far harder than a real aircraft would, and they looked like artifacts. This is a style choice, not physics
-* **Under stock, a roll control surface condenses only from the load it shares with its mirror twin**: a taileron, elevon or all-moving stabilator. A pure roll deflects the two halves equal and opposite, so neither fogs; a pull loads both alike, so both do. Stock gives a small, fully deflected surface far more lift than a real tail carries. Also a style choice
-* **KSP has no weather**, so the air's moisture is a stand-in: a fixed dew-point spread (12 K in the humid lowest layer, 18 K above it). It does not follow the time of day
-* **No vapor underneath.** A surface whose suction side faces the craft's belly makes none, so nothing forms under the wings or in a negative-g push. A style choice, like the rule above
-* Wing vapor is drawn on the craft you fly only (the vortices are drawn on every aircraft around you), as a particle effect: not volumetric, no shadows. The optional [Volumetric Wing Vapor](https://github.com/PogKai/ksp-volumetric-wing-vapor) add-on draws it as a volumetric cloud instead. When BDArmory's camera follows a fired missile, the vapor stays on the aircraft that fired it
-* Works under stock aerodynamics or Ferram Aerospace Research. Under FAR it reads each wing's own lift and stall, drops the roll rule above (FAR models the tail's downwash and realistic lift), caps the suction peak where the flow over the wing would go supersonic, and reads clipped panels at FAR's own lift coefficient. Under stock it behaves as in 1.3.0
+* **Lower atmosphere only.** Air thinner than 10% of the body's sea-level density (about 14 km on Kerbin) has a hard cutoff: no vapor and no work done
+* **KSP has no weather**, so the air's moisture is a fixed stand-in, not the time of day
+* **It needs its shader.** The raymarch needs `Shaders/wingvapor-<platform>.bundle` in the mod's folder and a graphics API that can run it (Direct3D 11, OpenGL Core, Metal or Vulkan). Without it the mod falls back to the legacy puffs and says so in the log
 
-## Performance
+## Legacy puffs
 
-One particle system per aircraft with a fixed cap on puffs, so a craft in a hard pull cannot cost more than a fixed amount. On a 137-part fighter in hard turns its physics averaged under 2.5 ms per physics step, and drawing it about a quarter of a millisecond a frame. Craft with many parts are updated every 2 to 4 physics steps, which its own smoothing hides. Above the altitude limit it costs almost nothing. There are no extra assets: KSP's own particle shader and a texture generated in code.
+The settings window (app launcher button, or **Alt+V** in flight) has a **Legacy particle vapor** switch that brings back the pre-2.0 look: puffs of KSP's own particles over each lifting part, on your craft only. The same window sets the vapor's density and height from 0 to 200%.
 
 ## Source
 
-[`Source/WingVapor/`](../Source/WingVapor). It is a second addon in the same DLL, and shares nothing with the vortex code but the log tag and the version.
+The [implementation reference](implementation.md) maps each effect to its source. The [public source](https://github.com/PogKai/ksp-wingtip-vortex/tree/main/Source) includes the volume integration (`WingVapor/RaymarchVapor.cs`), aerodynamic model (`Aeronautic/` and `AeronauticUnity/`), shader source (`Shaders/`), and legacy puffs (`WingVapor/WingVapor.cs` and `VaporRenderer.cs`). The aeronautic source revision and license are recorded in [THIRD-PARTY-NOTICES](../THIRD-PARTY-NOTICES.md).
 
 ---
 

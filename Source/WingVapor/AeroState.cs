@@ -17,9 +17,7 @@ namespace VortexVapor
         public float stall;         // 0..1, FAR's stalled fraction of this part; 0 under stock
     }
 
-    // A part's geometry in its own frame, measured once from its meshes and cached: its bounds, its
-    // thinnest axis (its surface normal), and its planform. Meshes with absurd bounds are skipped,
-    // since visual mods inflate renderer bounds to defeat culling.
+    // A part's bounds, normal axis and planform from its meshes, cached; absurd bounds skipped.
     public class PartBox
     {
         public Transform t;
@@ -72,9 +70,7 @@ namespace VortexVapor
             return Mathf.Abs(l.x) <= extents.x && Mathf.Abs(l.y) <= extents.y && Mathf.Abs(l.z) <= extents.z;
         }
 
-        // Inside the part's own colliders, not just its box: a round fuselage fills well under
-        // its box, and a wing panel laid along its side is outside it. Falls back to the box for
-        // a part with no collider this can test.
+        // Test the part's real collider shape, falling back to its box when no collider is testable.
         public bool ContainsSolid(Vector3 world)
         {
             if (!Contains(world)) return false;
@@ -106,9 +102,7 @@ namespace VortexVapor
         }
     }
 
-    // The vessel's parts as solid volumes, for TrailedVorticity's carry-through test and the wing
-    // vapor's buried-face test. Refresh() snapshots every part's position once, so a query is plain
-    // arithmetic.
+    // Parts as solid volumes for carry-through and buried-face tests.
     public class VesselBodies : IBodyQuery
     {
         public Vessel vessel;
@@ -253,12 +247,7 @@ namespace VortexVapor
 
         static Vector3 Axis(int i) { return i == 0 ? Vector3.right : (i == 1 ? Vector3.up : Vector3.forward); }
 
-        // The lifting parts as TrailedVorticity takes them, lift in newtons.
-        // vaporLift: under stock, a control surface that responds to roll (taileron, elevon,
-        // stabilator) condenses only from the mean load of its symmetry group, so a pure roll makes
-        // no vapor and a pull still does. A style rule, not physics, like
-        // WingVapor.CondenseAgainstLift. Not applied under FAR, which models the tail's downwash
-        // and realistic stall. The wake still sheds from the full lift.
+        // Lifting parts for TrailedVorticity; stock roll surfaces fog only from their group's mean load.
         public static void Surfaces(List<PartAeroState> parts, List<Surface> into)
         {
             into.Clear();
@@ -331,9 +320,7 @@ namespace VortexVapor
                 : "[VORTEX] wing vapor: FAR not detected (or API mismatch), using the stock lifting surfaces");
         }
 
-        // FAR's per-wing force, split into lift and drag the way FAR splits it (drag is the part
-        // along the airflow). FAR leaves worldSpaceForce at its last value when it stops computing,
-        // so those cases read as zero.
+        // FAR's per-wing force split into lift and drag; stale values read as zero.
         static bool TryReadFarWing(PartModule pm, Vessel vessel, Vector3 flowDir, ref Vector3 lift, ref Vector3 drag, ref float stall)
         {
             if (farWingType == null || !farWingType.IsInstanceOfType(pm)) return false;
@@ -356,9 +343,7 @@ namespace VortexVapor
             return true;
         }
 
-        // Every lifting part reports its own lift and drag, one entry per part (a part with several
-        // lifting modules is still one surface). flowDir is the unit direction of the vessel's
-        // motion through the air.
+        // Each lifting part's lift and drag; flowDir is the motion through the air.
         public static List<PartAeroState> Read(Vessel vessel, Vector3 flowDir)
         {
             var result = scratch;   // reused every call; callers must not hold it across frames
@@ -366,7 +351,7 @@ namespace VortexVapor
             if (vessel == null || vessel.Parts == null) return result;
             foreach (Part p in vessel.Parts)
             {
-                if (p.Modules == null) continue;
+                if (p.Modules == null || BDArmoryCraft.IsMissilePart(p)) continue;
                 bool lifting = false;
                 Vector3 lift = Vector3.zero, drag = Vector3.zero;
                 float stall = 0f;

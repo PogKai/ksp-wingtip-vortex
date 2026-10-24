@@ -21,9 +21,7 @@ namespace VortexVapor
         public Vector2 InPlane(Vector3 dir) { return new Vector2(Vector3.Dot(dir, u), Vector3.Dot(dir, v)); }
     }
 
-    // A lifting part's outline in its own plane: the convex hull of its mesh, in metres, about the
-    // centre of its bounds. Measured once per part. Pure geometry. The samples find which area is
-    // shared between stacked or clipped parts (see PlanformOverlap).
+    // A lifting part's outline (convex hull of its mesh), measured once.
     public class Planform
     {
         public Vector2[] hull;          // counter-clockwise
@@ -33,7 +31,11 @@ namespace VortexVapor
         public float thickness;         // m, extent along the normal
         public float radius;            // m, bounding radius about the origin
 
-        const int SampleGrid = 12;
+        // Samples are the GridN x GridN cell centres inside the outline; the sheet uses the same grid.
+        public const int GridN = 12;
+        public Vector2 gridMin, gridMax;
+        public int[] cellSample;
+        public Vector2[] gridPoints;
 
         public static Planform Build(List<Vector2> points, float thickness)
         {
@@ -44,15 +46,34 @@ namespace VortexVapor
 
             Vector2 min = new Vector2(float.MaxValue, float.MaxValue), max = -min;
             foreach (var h in pf.hull) { min = Vector2.Min(min, h); max = Vector2.Max(max, h); }
+            pf.gridMin = min; pf.gridMax = max;
+            pf.cellSample = new int[GridN * GridN];
+            for (int c = 0; c < pf.cellSample.Length; c++) pf.cellSample[c] = -1;
             var inside = new List<Vector2>();
-            for (int i = 0; i < SampleGrid; i++)
-                for (int j = 0; j < SampleGrid; j++)
+            for (int i = 0; i < GridN; i++)
+                for (int j = 0; j < GridN; j++)
                 {
-                    var q = new Vector2(Mathf.Lerp(min.x, max.x, (i + 0.5f) / SampleGrid),
-                                        Mathf.Lerp(min.y, max.y, (j + 0.5f) / SampleGrid));
-                    if (pf.Contains(q)) inside.Add(q);
+                    var q = new Vector2(Mathf.Lerp(min.x, max.x, (i + 0.5f) / GridN),
+                                        Mathf.Lerp(min.y, max.y, (j + 0.5f) / GridN));
+                    if (!pf.Contains(q)) continue;
+                    pf.cellSample[i * GridN + j] = inside.Count;
+                    inside.Add(q);
                 }
-            if (inside.Count == 0) inside.Add(Centroid(pf.hull));
+            if (inside.Count == 0)
+            {
+                Vector2 c = Centroid(pf.hull);
+                int ci = Mathf.Clamp((int)((c.x - min.x) / Mathf.Max(max.x - min.x, 1e-6f) * GridN), 0, GridN - 1);
+                int cj = Mathf.Clamp((int)((c.y - min.y) / Mathf.Max(max.y - min.y, 1e-6f) * GridN), 0, GridN - 1);
+                pf.cellSample[ci * GridN + cj] = 0;
+                inside.Add(c);
+            }
+            pf.gridPoints = new Vector2[(GridN + 1) * (GridN + 1)];
+            for (int j = 0; j <= GridN; j++)
+                for (int i = 0; i <= GridN; i++)
+                {
+                    var p = new Vector2(Mathf.Lerp(min.x, max.x, (float)i / GridN), Mathf.Lerp(min.y, max.y, (float)j / GridN));
+                    pf.gridPoints[j * (GridN + 1) + i] = pf.Contains(p) ? p : pf.ClosestOnHull(p);
+                }
             pf.samples = inside.ToArray();
             pf.sampleShare = new float[pf.samples.Length];
             for (int i = 0; i < pf.sampleShare.Length; i++) pf.sampleShare[i] = 1f;
@@ -68,6 +89,24 @@ namespace VortexVapor
                 if ((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x) < -1e-5f) return false;
             }
             return true;
+        }
+
+        // The point of the outline nearest to p.
+        public Vector2 ClosestOnHull(Vector2 p)
+        {
+            if (hull.Length == 0) return p;
+            Vector2 best = hull[0];
+            float bestSq = float.MaxValue;
+            for (int i = 0; i < hull.Length; i++)
+            {
+                Vector2 a = hull[i], e = hull[(i + 1) % hull.Length] - a;
+                float len2 = e.sqrMagnitude;
+                float t = len2 > 1e-12f ? Mathf.Clamp01(Vector2.Dot(p - a, e) / len2) : 0f;
+                Vector2 q = a + e * t;
+                float d = (p - q).sqrMagnitude;
+                if (d < bestSq) { bestSq = d; best = q; }
+            }
+            return best;
         }
 
         // Extent along an in-plane span direction s (unit).
@@ -171,9 +210,7 @@ namespace VortexVapor
         }
     }
 
-    // Which area of the airframe's lifting surfaces is shared: a sample covered by m planforms
-    // gives each 1/m of its area. Stacked duplicates add up to one surface, and a flap butted
-    // against a wing keeps all of its own.
+    // Shared area between stacked or clipped parts.
     public static class PlanformOverlap
     {
         // Two surfaces closer than this along their normals, or than their own thickness, are the

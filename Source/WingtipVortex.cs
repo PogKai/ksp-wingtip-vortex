@@ -1,16 +1,16 @@
-﻿using UnityEngine;
+using UnityEngine;
 using KSP;
 using System.Collections;
 using System.Collections.Generic;
 
 // The name and version a companion mod depends on (KSPAssemblyDependency).
-[assembly: KSPAssembly("WingtipVortex", 1, 5)]
+[assembly: KSPAssembly("WingtipVortex", 2, 0)]
 
 // One per craft, created and destroyed by WingtipVortexManager and bound to that craft for its
 // whole life.
 public class WingtipVortex : MonoBehaviour
 {
-    public const string ModVersion = "1.5.0";
+    public const string ModVersion = "2.0.0";
 
     // The craft this controller draws. Set by the manager immediately after AddComponent, which
     // is before Start() runs.
@@ -62,14 +62,11 @@ public class WingtipVortex : MonoBehaviour
     private List<GameObject> trailObjs = new List<GameObject>();
     private List<Transform> anchors = new List<Transform>();
 
-    // Rigid anchors: each anchor's offset is captured in the root part's frame, and the wake
-    // follows that point on the airframe, not the flexing part, so joint wobble is not drawn into
-    // the rope. Falls back to the part's own position if the root has changed or the two disagree
-    // by more than a part flexes.
+    // Anchors follow a fixed point in the root part's frame, so joint flex is not drawn into the rope.
     private List<Part> anchorRoots = new List<Part>();
     private List<Vector3> anchorRootOffsets = new List<Vector3>();
     private bool rigidAnchors = true;
-    private float rigidAnchorMaxFlexSpans = 0.25f;   // beyond this the capture is not trusted
+    private float rigidAnchorMaxFlexSpans = 0.25f;   // beyond this the measurement is not trusted
     private float peakTipFlex = 0f;                  // metres, reported with the session peaks
 
     Vector3 AnchorPosition(int i)
@@ -88,9 +85,7 @@ public class WingtipVortex : MonoBehaviour
     // surface needs before its vortex shows.
     private List<float> spanRatios = new List<float>();
 
-    // Wake tube: a generated mesh, so the cross-section can twist about the centreline (a
-    // TrailRenderer billboards to the camera and cannot). A tube, not a single ribbon, which goes
-    // edge-on and disappears.
+    // Wake tube: a generated mesh, so the section can twist (a TrailRenderer billboards).
     private bool enableRibbonMesh = true;
     private bool ribbonFirstSourceOnly = false;
 
@@ -101,10 +96,7 @@ public class WingtipVortex : MonoBehaviour
     // Hard cap on rope length in metres. Below ~500 m/s the lifetime binds first.
     private float ribbonMaxLength = 2500f;
 
-    // Wake smoothing: Laplacian smoothing over a window near the head, one pass per frame. Ring 0
-    // is never touched, so the head stays on the tip; the window is bounded, so each ring is
-    // smoothed a fixed number of times. Attenuation per pass is 1 - amount*(1 - cos(2*pi/N)) for a
-    // wavelength of N rings.
+    // Laplacian smoothing over a bounded window behind the head; ring 0 stays on the tip.
     private int ribbonSmoothWindow = 16;      // rings behind the head that get a pass each frame
     private float ribbonSmoothAmount = 0.6f;  // 0 disables
     private int ribbonSides = 5;                // cross-section vertices per ring
@@ -146,9 +138,7 @@ public class WingtipVortex : MonoBehaviour
     // to nothing.
     private float ribbonEndFade = 0.25f;
 
-    // Brightness variation along the rope, sampled against the birth odometer so it stays fixed in
-    // the air and streams backward. Scaled by contrailBlend: at altitude brightness is otherwise
-    // uniform and the rope shows no motion.
+    // Brightness variation along the rope, fixed in the air; scaled by contrailBlend.
     private float ribbonFlowDepth = 0.45f;      // brightness swing, at full contrail blend
     private float ribbonFlowScale = 0.03f;      // cycles per metre (~33 m per Perlin unit)
     private List<WakeRibbon> ribbons = new List<WakeRibbon>();
@@ -177,18 +167,14 @@ public class WingtipVortex : MonoBehaviour
 
     private float maxDelta = 0.05f;
     private float abnormalFrameThreshold = 0.20f;
+    private const float stallDelta = 0.5f;   // s; a frame this long restarts the trails
 
-    // High-altitude condensation regime, keyed on ambient temperature so it is body-relative. 253 K
-    // (-20 C) is the warm limit and 233 K (-40 C) the cold anchor, raised per body to the coldest
-    // air it has (RefreshContrailBand).
+    // High-altitude contrail regime by ambient temperature, per body (RefreshContrailBand).
     private float contrailTempWarm = 253f;   // K: above this, no persistent contrail
     private float contrailTempCold = 233f;   // K: at or below this, fully developed
     private float contrailBandMin = 12f;     // K: never let the band collapse to a step
 
-    // Illumination: a contrail is visible by scattering sunlight, so brightness follows
-    // VortexVapor.Sunlight (1 with the sun above the craft's horizon, fading through twilight). The
-    // night floor keeps the wake faintly visible, since an additive wake is brighter against a dark
-    // sky.
+    // Brightness follows VortexVapor.Sunlight; the night floor keeps the wake faintly visible.
     private float nightFloorScale = 0.20f;   // ambient floor in full shadow
     private float dayLightScale = 0.70f;     // brightness in full daylight; 1.0 for no dimming
     private bool loggedSunFlux = false;
@@ -201,9 +187,7 @@ public class WingtipVortex : MonoBehaviour
     private float contrailMinVertexDist = 1.5f;    // contrails are near-straight; sample coarsely
     private float contrailWidthScale = 2.2f;
 
-    // Contrail spreading: flat until contrailSpreadStart, then a quadratic widening to 1 +
-    // contrailSpreadMax at the end, scaled by contrailBlend. Opacity falls as
-    // spread^-contrailSpreadDimPow.
+    // Contrail spread: flat until contrailSpreadStart, then quadratic to 1 + contrailSpreadMax.
     private float contrailSpreadStart = 0.5f;     // fraction of lifetime before breakup
     private float contrailSpreadMax = 2.0f;       // extra width at the very end, x
     private float contrailSpreadDimPow = 0.4f;
@@ -235,9 +219,7 @@ public class WingtipVortex : MonoBehaviour
     // Half-width of the band at the wing tip inside which the forward-most vertex wins.
     private const float tipBand = 0.15f;
 
-    // Secondary-source gate: a non-main surface needs both an onset load and an airspeed. The onset
-    // is a multiple of the main wing's, scaled by 1/spanRatio down to this floor, since circulation
-    // grows with span share over lift share.
+    // Secondary onset: a multiple of the main wing's, scaled by 1/spanRatio down to this floor.
     private float secondaryOnsetMultMin = 2.0f;   // biggest secondaries still need 2x the wing
     private float secondaryOnsetMultMax = 4.0f;   // small nose canards, capped here
     private float secondaryGSpan = 1.0f;          // load range from onset to full strength
@@ -246,16 +228,12 @@ public class WingtipVortex : MonoBehaviour
     private float secondarySpeedMin = 45f;
     private float secondarySpeedFull = 90f;
 
-    // Secondary wakes are capped to this length in metres, because a canard's vortex merges into
-    // the wing's system within a few chords instead of trailing. Scaled by span ratio; at full tip
-    // likeness it returns to the main-wing length.
+    // Secondary wakes capped in length (a canard's vortex merges into the wing's); scaled by span ratio.
     private float secondaryWakeLength = 25f;   // metres of visible cord at full secondary size
     // Seconds; only guarantees the tube enough rings to be geometry.
     private float secondaryMinLife = 0.05f;
 
-    // Tip likeness: a surface reaching the wing's span is treated as a wingtip. Below
-    // mainLikeRatioMin it gets full secondary treatment, ramping to main-wing treatment as it
-    // approaches the wing's span.
+    // Below mainLikeRatioMin a surface is a secondary; ramps to main-wing treatment above it.
     private float mainLikeRatioMin = 0.92f;    // below this, full secondary treatment
     private float mainLikeRatioFull = 0.95f;   // at or above this, identical to a main wingtip
 
@@ -263,7 +241,7 @@ public class WingtipVortex : MonoBehaviour
     // down by the quadratic in span ratio.
     private float secondaryStrengthMin = 0.95f; // strength at the top of the secondary range
 
-    // Test switch: gives secondaries strength 1 and span ratio 1, bypassing every secondary gate.
+    // Use uniform strength and span for secondary sources when enabled.
     private bool treatSecondariesAsMain = false;
 
     // SOURCE SELECTION thresholds. See FindVortexSources.
@@ -284,9 +262,7 @@ public class WingtipVortex : MonoBehaviour
     private float refSpan = 16f;     // metres
     private float sizeFactor = 1f;   // refreshed on the bounds timer
 
-    // Circulation onset: the load needed for onset scales with rho*V relative to the reference
-    // condition (sea level, 250 m/s, scale 1), because the same lift makes more circulation in slow
-    // or thin air. The onset span scales with it.
+    // Onset load scales with rho*V against the reference condition (sea level, 250 m/s).
     private float onsetLoadRef = 3.0f;        // load factor for onset at the reference condition
     private float onsetSpanRef = 10f;         // ...and the range from onset to full intensity
     private float onsetRefDensity = 1.225f;   // kg/m^3
@@ -300,15 +276,11 @@ public class WingtipVortex : MonoBehaviour
     private float flyingSpeedMin = 20f;   // m/s, fully gated below
     private float flyingSpeedFull = 40f;  // m/s, ungated above
 
-    // Ground roll: the lift-coefficient proxy L/(q*b^2) does not shrink with speed on the takeoff
-    // roll, so airborne is gated directly (what carries the aircraft). Not a ground-proximity test:
-    // short-final vapor is in ground effect.
+    // Airborne gate for the ground roll, where the CL proxy does not shrink with speed.
     private float airborneBlend = 0f;
     private float airborneBlendSpeed = 2.5f;   // ~0.4 s fade in at rotation, so it does not pop
 
-    // Humid boundary layer: near the surface the air is close to dew point, so little core pressure
-    // drop is needed. Depth is density relative to the body's sea-level density, and 'working hard
-    // for its speed' is the proxy L/(q*b^2) = CL/aspect ratio.
+    // Humid boundary layer near the surface needs less core pressure drop.
     private float humidDensityMin = 0.62f;   // fraction of sea-level density where the layer ends
     private float humidLoadMin = 0.10f;      // CL/AR: ordinary cruise sits far below this
     private float humidLoadFull = 0.26f;     // ...near CLmax for a typical aspect ratio
@@ -347,11 +319,7 @@ public class WingtipVortex : MonoBehaviour
     // Ambient stirring rides the depth-in-atmosphere blend of the humid boundary layer.
     private float ambientTurbScale = 0.6f;     // extra eddy viscosity at full atmospheric depth
 
-    // Ground effect (method of images): the mirror vortex cancels the pair's self-induced descent
-    // and pushes each vortex outboard. This moves and diffuses the rope; it never gates visibility.
-    // For a pair at height h with separation b0 = (pi/4)*b: lateral drift v = Gamma/(4*pi) * b0^2 /
-    // (h * (4h^2 + b0^2)); descent retained = 4h^2 / (4h^2 + b0^2). h is floored at b0/2 in the
-    // drift.
+    // Ground effect by the method of images: drift outboard, descent cancelled; never gates visibility.
     private float groundEffectEnable = 1f;      // 0 disables both drift and near-ground diffusion
     private float groundSpreadScale = 1f;
     private float groundSpreadMaxSpans = 1.5f;  // backstop on total lateral drift
@@ -361,9 +329,7 @@ public class WingtipVortex : MonoBehaviour
     private float groundEffectCeilingSpans = 10f;
     private bool loggedGroundEffect = false;
 
-    // Vortex breakdown, spiral and bubble modes. Swirl ratio S = 0.715*Gamma/(2*pi*rc*V) = 1.42 *
-    // clProxy, with rc the viscous core (4% of span). Onset from Spall, Gatski & Grosch (1987):
-    // Rossby number below ~0.65, swirl above ~1.5, ramped in slightly before.
+    // Vortex breakdown (spiral and bubble), onset after Spall, Gatski & Grosch (1987).
     private float breakdownEnable = 1f;
     private float viscousCoreSpanFraction = 0.04f;
     private float breakdownSwirlOnset = 1.4f;
@@ -433,9 +399,7 @@ public class WingtipVortex : MonoBehaviour
     private const int widthKeyCount = 14;
     private Keyframe[] widthKeys = new Keyframe[widthKeyCount];
 
-    // Leading-end shape: the trail converges toward the anchor over rollupMinMetres (an absolute
-    // length, converted to a curve fraction each frame) and stops at headWidthFraction, not zero,
-    // so there is a visible origin.
+    // The trail converges to the anchor over rollupMinMetres, ending at headWidthFraction.
     private float rollupMinMetres = 1.5f;
     private float rollupMaxMetres = 12f;
     private float rollupSizeScale = 0.25f;   // fraction of vesselSize used as the roll-up length
@@ -451,15 +415,20 @@ public class WingtipVortex : MonoBehaviour
     private AnimationCurve shedCurve = new AnimationCurve();
     private Gradient shedGradient = new Gradient();
     private Gradient lineGradient = new Gradient(); // line-mode's own scratch gradient — see its use below
+    static readonly GradientColorKey[] lineColorKeys =
+    {
+        new GradientColorKey(Color.white, 0f),
+        new GradientColorKey(new Color(0.8f, 0.8f, 0.8f), 0.5f),
+        new GradientColorKey(new Color(0.6f, 0.6f, 0.6f), 1f)
+    };
+    private readonly GradientAlphaKey[] lineAlphaKeys = new GradientAlphaKey[3];
 
     // Cached on the bounds timer; both calls allocate or walk every part.
     private List<ModuleLiftingSurface> liftSurfaces = new List<ModuleLiftingSurface>();
     private float vesselMassTons = 1f;
     private float gravityAccel = 9.81f;
 
-    // FAR replaces ModuleLiftingSurface, so under FAR the load factor sums each
-    // FARWingAerodynamicModel's own lift, not FARAPI.VesselAerodynamicForce, which includes
-    // fuselage body lift. Bound by reflection, so FAR stays optional.
+    // Under FAR, sums each FARWingAerodynamicModel's lift (no body lift); bound by reflection.
     static class FARBridge
     {
         private static System.Type wingType;                       // ferram4.FARWingAerodynamicModel
@@ -535,16 +504,20 @@ public class WingtipVortex : MonoBehaviour
     }
     private List<PartModule> farWings = new List<PartModule>();
 
-    // Detected by module name, so FAR is not a dependency. Lift and control stay separate, as in
-    // stock.
+    // Stock modules by type (a name lookup never matched ModuleControlSurface), FAR's by name so it
+    // is not a dependency. Lift and control stay separate, as in stock.
     internal static bool IsLiftPart(Part p)
     {
-        return p.Modules.Contains("ModuleLiftingSurface") || p.Modules.Contains("FARWingAerodynamicModel");
+        if (p.Modules.Contains("FARWingAerodynamicModel")) return true;
+        foreach (PartModule m in p.Modules) if (m is ModuleLiftingSurface && !(m is ModuleControlSurface)) return true;
+        return false;
     }
 
     internal static bool IsControlPart(Part p)
     {
-        return p.Modules.Contains("ModuleControlSurface") || p.Modules.Contains("FARControllableSurface");
+        if (p.Modules.Contains("FARControllableSurface")) return true;
+        foreach (PartModule m in p.Modules) if (m is ModuleControlSurface) return true;
+        return false;
     }
 
     internal static bool IsAeroSurface(Part p) { return IsLiftPart(p) || IsControlPart(p); }
@@ -607,9 +580,7 @@ public class WingtipVortex : MonoBehaviour
     private bool rocketUseLineMode = false;
     private int verticalLauncher = -1;   // -1 unknown, 0 no, 1 yes
 
-    // Rocket fin sources: the aircraft rule assumes left and right, which fails on a cruciform
-    // tail. Take the lifting surfaces at the bottom of the stack, one vortex each, up to four, with
-    // offset measured radially from the roll axis.
+    // Rocket fins: the lowest lifting surfaces, one vortex each, up to four, offset radially.
     private float finBandFraction = 0.12f;   // how far up from the aft-most surface still counts
     private float finBandMin = 1.5f;         // ...with a floor, for short stacks
     private float minRadialOffset = 0.25f;   // a fin has to actually stick out of the fuselage
@@ -621,9 +592,7 @@ public class WingtipVortex : MonoBehaviour
     // atmosphere.
     private float wakeShutdownTau = 0.5f;   // seconds
 
-    // Sector selection: cluster candidates by angle about the roll axis and start a new sector at
-    // each gap above sectorGapDeg. Computed and logged, but unused unless useSectorSelection is
-    // set.
+    // Sector selection by angle about the roll axis; logged, used only with useSectorSelection.
     private bool useSectorSelection = false;
     private float sectorGapDeg = 40f;
     private int sectorSourceCap = 6;   // performance clamp, not an aerodynamic rule
@@ -685,9 +654,12 @@ public class WingtipVortex : MonoBehaviour
         }
     }
 
-    // Tears down every per-source object and the parallel lists that index them.
-    // True when any source no longer belongs to the craft being flown (destroyed anchor, or the
-    // part left on another vessel).
+    // True when a source no longer belongs to the craft being flown.
+    // The wings found by the first detection. After an anchor is lost, only these (what is left of them) can
+    // carry a vortex again: a tail elevator or rudder never takes over as the "wing".
+    HashSet<Part> firstMainParts, firstSecParts;
+    bool redetectAfterLoss;
+
     bool SourcesStale()
     {
         for (int i = 0; i < anchors.Count; i++)
@@ -741,10 +713,7 @@ public class WingtipVortex : MonoBehaviour
         ClearSources();
     }
 
-    // KSP's FloatingOrigin does not move TrailRenderer vertices, so a shift leaves them in the old
-    // frame (the forward spike); they are corrected in place. A vortex is world-anchored, so the
-    // correction is the full offset (offset + nonFrame); vessels move by offset alone. LineRenderer
-    // points are rebuilt every frame and need no correction.
+    // FloatingOrigin does not move TrailRenderer vertices; they are shifted here by the full offset.
     void OnFloatingOriginShift(Vector3d offsetVessel, Vector3d nonFrame)
     {
         Vector3 worldOffset = (Vector3)(offsetVessel + nonFrame);
@@ -787,11 +756,7 @@ public class WingtipVortex : MonoBehaviour
         return Mathf.Abs(e.x * dir.x) + Mathf.Abs(e.y * dir.y) + Mathf.Abs(e.z * dir.z);
     }
 
-    // Finds the outermost mesh vertex of a part on the given side, in world space. 'Outermost' is
-    // span distance from the roll axis (x and y); the forward preference is a tie-break among
-    // vertices already at the tip. Scans every MeshFilter and uses sharedMesh.
-    // The shedding point on a rocket fin: furthest from the roll axis, then furthest aft, with no
-    // side test.
+    // Outermost mesh vertex of the part (rocket fins: furthest from the roll axis, then aft).
     bool TryFindRadialTip(Part part, out Vector3 tipWorld)
     {
         tipWorld = Vector3.zero;
@@ -801,7 +766,7 @@ public class WingtipVortex : MonoBehaviour
         float maxR = float.MinValue;
         foreach (var mf in filters)
         {
-            if (mf.GetComponentInParent<Part>() != part) continue;
+            if (mf.GetComponentInParent<Part>() != part || !Shown(mf)) continue;
             Mesh mesh = mf.sharedMesh;
             if (mesh == null) continue;
             Vector3[] verts = mesh.vertices;
@@ -818,7 +783,7 @@ public class WingtipVortex : MonoBehaviour
         bool found = false;
         foreach (var mf in filters)
         {
-            if (mf.GetComponentInParent<Part>() != part) continue;
+            if (mf.GetComponentInParent<Part>() != part || !Shown(mf)) continue;
             Mesh mesh = mf.sharedMesh;
             if (mesh == null) continue;
             Vector3[] verts = mesh.vertices;
@@ -835,6 +800,12 @@ public class WingtipVortex : MonoBehaviour
     }
 
     // Delegates so the aircraft path is unchanged: theta 0 is +lateral and 180 is -lateral.
+    static bool Shown(MeshFilter mf)
+    {
+        Renderer r = mf.GetComponent<Renderer>();
+        return r != null && r.enabled;
+    }
+
     bool TryFindTipVertex(Part part, bool isRight, out Vector3 tipWorld)
     {
         return TryFindTipVertex(part, isRight ? 0f : 180f, out tipWorld);
@@ -855,7 +826,7 @@ public class WingtipVortex : MonoBehaviour
         foreach (var mf in filters)
         {
             // Skip meshes belonging to an attached child part.
-            if (mf.GetComponentInParent<Part>() != part) continue;
+            if (mf.GetComponentInParent<Part>() != part || !Shown(mf)) continue;
             Mesh mesh = mf.sharedMesh;
             if (mesh == null) continue;
             Vector3[] verts = mesh.vertices;
@@ -874,7 +845,7 @@ public class WingtipVortex : MonoBehaviour
         bool found = false;
         foreach (var mf in filters)
         {
-            if (mf.GetComponentInParent<Part>() != part) continue;
+            if (mf.GetComponentInParent<Part>() != part || !Shown(mf)) continue;
             Mesh mesh = mf.sharedMesh;
             if (mesh == null) continue;
             Vector3[] verts = mesh.vertices;
@@ -891,10 +862,7 @@ public class WingtipVortex : MonoBehaviour
         return found;
     }
 
-    // Resolves the vessel's geometric frame. Local component indices cannot be trusted: parts are
-    // authored with the stack along +Y, so on an aircraft the root's local Y is the nose and Z is
-    // vertical. Only the lateral axis is safe.
-    // Spread of part positions along a world direction, immune to renderer contamination.
+    // Spread of part positions along a world direction (renderer bounds are unreliable).
     float PartSpread(Vector3 dir)
     {
         if (vessel == null || vessel.parts == null) return 0f;
@@ -914,9 +882,7 @@ public class WingtipVortex : MonoBehaviour
     {
         axLateralLocal = Vector3.right;
 
-        // The length axis is picked from part positions, not renderer bounds, which effect meshes
-        // inflate (a 17 m fighter measured 46.3 m long and 44.1 m tall). Only the comparison is
-        // needed, and part positions give about 16 m against 3 m.
+        // Length axis from part positions; effect meshes inflate renderer bounds.
         float fwdSpread = PartSpread(vesselTransform.forward);
         float upSpread = PartSpread(vesselTransform.up);
         bool haveSpread = (fwdSpread + upSpread) > 0.01f;
@@ -1062,8 +1028,8 @@ public class WingtipVortex : MonoBehaviour
             var r = rends[i];
             if (r == null) continue;
 
-            // Belongs to an attached child part.
-            if (r.GetComponentInParent<Part>() != p) continue;
+            // Belongs to an attached child part, or hidden (B9 procedural wings keep template meshes).
+            if (r.GetComponentInParent<Part>() != p || !r.enabled) continue;
 
             // Wake geometry: a TrailRenderer's bounds cover its whole trail.
             if (r is TrailRenderer || r is LineRenderer || r is ParticleSystemRenderer) continue;
@@ -1101,11 +1067,12 @@ public class WingtipVortex : MonoBehaviour
         return any;
     }
 
-    // A part's reach along the craft's lateral axis. Renderer.bounds is world-aligned, so a banked
-    // craft measured up to 1.8x its span; a mesh's own bounds rotate with it, so their corners are
-    // exact.
+    // A part's reach along the lateral axis, from mesh bounds; `exact`: from the vertices, as a mesh's
+    // bounds go stale when a mod reshapes it (B9 procedural wings) and box corners overreach a swept panel.
     static readonly List<Renderer> lateralScratch = new List<Renderer>();
-    void PartLateralRange(Part p, ref float lo, ref float hi)
+    static readonly List<Vector3> lateralVerts = new List<Vector3>();
+    const int LateralMaxVertices = 2000;
+    void PartLateralRange(Part p, ref float lo, ref float hi, bool exact = false)
     {
         lateralScratch.Clear();
         Bounds wb;
@@ -1115,6 +1082,20 @@ public class WingtipVortex : MonoBehaviour
         {
             Renderer r = lateralScratch[i];
             MeshFilter mf = r is MeshRenderer ? r.GetComponent<MeshFilter>() : null;
+            if (exact && mf != null && mf.sharedMesh != null && mf.sharedMesh.isReadable)
+            {
+                lateralVerts.Clear();
+                mf.sharedMesh.GetVertices(lateralVerts);
+                int stride = Mathf.Max(1, lateralVerts.Count / LateralMaxVertices);
+                Matrix4x4 toWorld = r.transform.localToWorldMatrix;
+                for (int k = 0; k < lateralVerts.Count; k += stride)
+                {
+                    float x = Vector3.Dot(toWorld.MultiplyPoint3x4(lateralVerts[k]) - origin, right);
+                    if (x < lo) lo = x;
+                    if (x > hi) hi = x;
+                }
+                continue;
+            }
             Transform space;
             Bounds lb;
             if (mf != null && mf.sharedMesh != null) { lb = mf.sharedMesh.bounds; space = r.transform; }
@@ -1135,7 +1116,7 @@ public class WingtipVortex : MonoBehaviour
     float LateralReach(Part p, Bounds worldB)
     {
         float lo = float.MaxValue, hi = float.MinValue;
-        PartLateralRange(p, ref lo, ref hi);
+        PartLateralRange(p, ref lo, ref hi, true);
         if (hi < lo)
             return Mathf.Abs(Vector3.Dot(worldB.center - vesselTransform.position, vesselTransform.right))
                    + ExtentAlong(worldB, vesselTransform.right);
@@ -1169,9 +1150,7 @@ public class WingtipVortex : MonoBehaviour
         }
         vesselSize = Mathf.Clamp(vesselBounds.size.magnitude, 0.1f, 1000f);
 
-        // Span and mass are read at the throttled cadence (GetTotalMass walks every part). Clamped
-        // as a last defence, so a bad measurement degrades to wrong-looking rather than invisible.
-        // Span is measured in the craft's own frame.
+        // Span and mass at the throttled cadence, clamped as a last defence.
         float latLo = float.MaxValue, latHi = float.MinValue;
         foreach (var part in vessel.parts)
         {
@@ -1200,10 +1179,7 @@ public class WingtipVortex : MonoBehaviour
         gravityAccel = Mathf.Max((float)FlightGlobals.getGeeForceAtPosition(vessel.CoM).magnitude, 0.01f);
     }
 
-    // Source selection: one rule over four slots, {left, right} x {main wing, secondary surface}.
-    // Within a slot the winner is the part reaching furthest from the centreline, which caps an
-    // aircraft at four vortices. A surface counts as separate only if it is not physically
-    // connected to the main wing's assembly.
+    // Source selection: {left, right} x {main wing, secondary}, furthest part from the centreline wins.
     void FindVortexSources()
     {
         // Diagnostic: full aero-surface inventory. Resolve the vessel's frame before measuring
@@ -1278,11 +1254,14 @@ public class WingtipVortex : MonoBehaviour
         // filter.
         pool.Sort((a, b) => b.extremity.CompareTo(a.extremity));
         foreach (var c in pool)
-            Log($"CANDIDATE part={c.part.name} side={(c.isLeft ? "L" : "R")} ext={c.extremity:F2} z={c.z:F2}");
+            Log($"CANDIDATE part={c.part.name} side={(c.isLeft ? "L" : "R")} ext={c.extremity:F2} z={c.z:F2}{(IsControlPart(c.part) ? " ctrl" : "")}");
 
         // Main wing: the furthest-reaching surface on each side.
-        AeroCandidate mainLeft = BestOnSide(pool, true, null);
-        AeroCandidate mainRight = BestOnSide(pool, false, null);
+        bool keepOriginal = redetectAfterLoss && firstMainParts != null;
+        List<AeroCandidate> mainPool = keepOriginal ? pool.FindAll(c => firstMainParts.Contains(c.part)) : pool;
+        if (keepOriginal) Log($"anchor lost — only the original wing's {mainPool.Count} surface(s) may carry a vortex");
+        AeroCandidate mainLeft = BestOnSide(mainPool, true, null);
+        AeroCandidate mainRight = BestOnSide(mainPool, false, null);
 
         // Assembly: everything physically continuous with those winners.
         HashSet<Part> mainAssembly = BuildAssembly(pool, mainLeft, mainRight);
@@ -1300,11 +1279,7 @@ public class WingtipVortex : MonoBehaviour
         if (mainZLo > mainZHi) { mainZLo = 0f; mainZHi = 0f; }
         float sep = Mathf.Max(secondaryMinSeparation, (mainZHi - mainZLo) * 0.15f);
 
-        // Secondary: the best surface that is not the main wing. A forward surface (canard) is
-        // preferred outright: it sits in clean air and carries a real share of lift. An aft one is
-        // kept only at tandem scale, since a stabiliser carries a few percent of the lift over a
-        // short span inside the wing's downwash, and core pressure drop goes as circulation
-        // squared.
+        // Secondary: a canard is preferred outright; a tailplane only at tandem scale.
         float mainExt = 0f;
         if (mainLeft != null) mainExt = Mathf.Max(mainExt, mainLeft.extremity);
         if (mainRight != null) mainExt = Mathf.Max(mainExt, mainRight.extremity);
@@ -1316,6 +1291,7 @@ public class WingtipVortex : MonoBehaviour
             foreach (var c in pool)
             {
                 if (mainAssembly.Contains(c.part)) continue;
+                if (keepOriginal && (firstSecParts == null || !firstSecParts.Contains(c.part))) continue;
                 if (c.z > mainZHi + sep) foreSec.Add(c);
                 else if (c.z < mainZLo - sep) aftSec.Add(c);
             }
@@ -1359,10 +1335,12 @@ public class WingtipVortex : MonoBehaviour
         bool okMR = SpawnSlot(pool, mainRight, mainAssembly, true, 1f, "MAIN RIGHT");
 
         // Symmetry fallback: mirror the surviving side's tip across the centreline.
-        if (!okML && okMR && mainRight != null)
+        // (not after a loss: a broken wing leaves its side bare)
+        if (!keepOriginal && !okML && okMR && mainRight != null)
             AddWingVortex(mainRight.part, false, 1f, true, mainAssembly);
-        if (!okMR && okML && mainLeft != null)
+        if (!keepOriginal && !okMR && okML && mainLeft != null)
             AddWingVortex(mainLeft.part, true, 1f, true, mainAssembly);
+        if (!keepOriginal) { firstMainParts = mainAssembly; firstSecParts = secAssembly; }
 
         // Size of this secondary relative to the main wing; the gate in Update() reads it.
         float ratioL = (mainExt > 0f && secLeft != null) ? Mathf.Clamp01(secLeft.extremity / mainExt) : 1f;
@@ -1412,9 +1390,6 @@ public class WingtipVortex : MonoBehaviour
         return t * t * (3f - 2f * t);
     }
 
-    // Strength for a secondary slot: exactly 1 for a surface that is a wingtip in all but name,
-    // which skips the gate in Update(). Below the main-like band the floor falls off quadratically
-    // with span ratio, since core pressure drop goes as circulation squared.
     // How many times the main wing's onset load the surface must reach (see secondaryOnsetMultMin).
     float SecondaryOnsetMult(float spanRatio)
     {
@@ -1534,9 +1509,7 @@ public class WingtipVortex : MonoBehaviour
         return pool;
     }
 
-    // Cluster by angle about the roll axis: sort by theta, open a new sector wherever the gap to
-    // the previous candidate exceeds sectorGapDeg, wrapping around. A pure function of the
-    // candidate set, so re-detection after staging is stable.
+    // Cluster by angle about the roll axis, a new sector at each gap over sectorGapDeg.
     List<List<AeroCandidate>> BuildSectors(List<AeroCandidate> pool)
     {
         List<List<AeroCandidate>> sectors = new List<List<AeroCandidate>>();
@@ -1677,21 +1650,25 @@ public class WingtipVortex : MonoBehaviour
     }
 
     // First entry on the requested side of an extremity-sorted list.
+    // The furthest-reaching; a control surface only when it reaches ControlTipMarginM past every
+    // lifting part on that side (an all-moving or bent-up tip panel), never an aileron level with the tip.
+    const float ControlTipMarginM = 0.1f;
     AeroCandidate BestOnSide(List<AeroCandidate> sorted, bool wantLeft, HashSet<Part> skip)
     {
+        AeroCandidate first = null, lift = null;
         for (int i = 0; i < sorted.Count; i++)
         {
             var c = sorted[i];
             if (c.isLeft != wantLeft) continue;
             if (skip != null && skip.Contains(c.part)) continue;
-            return c;
+            if (first == null) first = c;
+            if (IsLiftPart(c.part)) { lift = c; break; }
         }
-        return null;
+        if (first == null || lift == null || first == lift) return first ?? lift;
+        return first.extremity > lift.extremity + ControlTipMarginM ? first : lift;
     }
 
-    // Everything physically continuous with the seed parts. Panels of one wing are either linked in
-    // the part tree or touching, depending on how it was built, so both are tested. Anything in the
-    // set is the same wing and never a second source.
+    // Everything physically continuous with the seeds (linked or touching): one wing.
     HashSet<Part> BuildAssembly(List<AeroCandidate> pool, AeroCandidate seedA, AeroCandidate seedB)
     {
         HashSet<Part> assembly = new HashSet<Part>();
@@ -1815,9 +1792,7 @@ public class WingtipVortex : MonoBehaviour
         return true;
     }
 
-    // One vortex rope's geometry and wake history. Buffers are allocated once at full size and
-    // rewritten in place; surplus rings collapse onto the tail at zero radius and alpha, so mesh
-    // sizes never change (KSP is GC-sensitive).
+    // One rope's geometry and history; fixed-size buffers rewritten in place (no GC).
     private class WakeRibbon
     {
         public GameObject obj;
@@ -1944,11 +1919,7 @@ public class WingtipVortex : MonoBehaviour
         return 1f + depth * ((Mathf.PerlinNoise(r.odometer * ribbonFlowScale, r.seed) - 0.5f) * 2f);
     }
 
-    // Toward the roll axis, from the anchor: the radial-outward direction with the roll-axis
-    // component projected out, negated. No side test, so it is correct for a fin pointing straight
-    // up. Measured once per frame at the anchor, because a ring laid behind it lies along the
-    // flight path, which is angle of attack off the roll axis, and would tip toward the belly.
-    // Update() blends the rings in between from the last head's direction.
+    // Toward the roll axis from the anchor, measured once per frame at the anchor.
     Vector3 RibbonInward(WakeRibbon r, Vector3 anchorPos)
     {
         Vector3 rel = anchorPos - vesselTransform.position;
@@ -1975,9 +1946,7 @@ public class WingtipVortex : MonoBehaviour
         {
             float step = (p - r.pts[0]).magnitude;
             r.odometer += step;
-            // The spiral's phase advances by this step at the wavelength in force now and is
-            // stored, not derived later from odo / lambda, which would re-wind every spiral when
-            // lambda moves.
+            // Phase is stored, not derived from odo / lambda, so laid spirals keep their shape.
             r.spiralPhase = Mathf.Repeat(r.spiralPhase + step * (Mathf.PI * 2f) / SpiralLambda(r.spacing),
                                          Mathf.PI * 2f);
         }
@@ -1997,9 +1966,7 @@ public class WingtipVortex : MonoBehaviour
 
         r.inDir[0] = inward;   // see RibbonInward
 
-        // Ground effect for this ring. Height is the vessel's height above ground plus the point's
-        // offset along local up. Drift is horizontal and outboard: the inward direction flattened
-        // onto the ground plane.
+        // Ground effect for this ring: height above ground, drift horizontal and outboard.
         r.geVel[0] = Vector3.zero;
         r.geFac[0] = 0f;
         if (frameGroundOn)
@@ -2077,6 +2044,8 @@ public class WingtipVortex : MonoBehaviour
         // Sets only how fast the spiral decays; its phase was fixed at birth (see r.sPhase).
         float spiralLambda = SpiralLambda(spacingNow);
         float groundCap = groundSpreadMaxSpans * vesselSpan;
+        Camera view = FlightCamera.fetch != null ? FlightCamera.fetch.mainCamera : Camera.main;
+        float pixelScale = view != null ? 2f * Mathf.Tan(view.fieldOfView * Mathf.Deg2Rad * 0.5f) / Mathf.Max(view.pixelHeight, 1) : 0f;
 
         // Parallel transport: carry the previous ring's normal forward and re-orthogonalise,
         // instead of a Cross(tangent, up) frame that flips near the reference axis.
@@ -2138,10 +2107,7 @@ public class WingtipVortex : MonoBehaviour
             // diffusing) are separate; visible radius is their product.
             float coreG = CoreGrowth(age, 1f + groundTurbScale * r.geFac[src]);
 
-            // Breakdown: everything past the burst scales with depth, which is continuous in swirl,
-            // so neighbouring rings do not step. Past the burst: extra diffusion (with dimming), a
-            // bubble flare centred two widths downstream, and a fade quick for a bubble and gentler
-            // for a spiral.
+            // Past the burst: extra diffusion, a bubble flare and a fade, all scaled by depth.
             float bdP = age - r.bdT[src];
             float bdDepth = r.bdDepth[src];
             bool broken = bdP > 0f && bdDepth > 0f;
@@ -2183,9 +2149,7 @@ public class WingtipVortex : MonoBehaviour
             // direction was set at birth; only the magnitude eases.
             float ease = Mathf.Clamp01(arc / Mathf.Max(ribbonInwardGrow, 0.01f));
             ease = ease * ease * (3f - 2f * ease);
-            // Scaled by the source's strength, not the ring's shed, so load wobble does not zigzag
-            // the centreline. The pair settles at a position set by the span loading's shape, (1 -
-            // pi/4) b/2 inboard for an elliptic wing, not by the lift.
+            // Scaled by the source's strength, not the ring's, so load wobble does not zigzag the rope.
             Vector3 centre = p + r.inDir[src] * (ribbonInwardAmp * inwardScale * ease);
 
             // Ground-effect drift: zero at the head, opening linearly with the ring's own age.
@@ -2196,9 +2160,7 @@ public class WingtipVortex : MonoBehaviour
                 centre += drift;
             }
 
-            // Spiral breakdown. The basis is built from this ring's own tangent and local up, not
-            // the transported frame, which is re-derived from the head every frame and would
-            // rewrite every spiral already laid.
+            // Spiral basis from this ring's own tangent, so laid spirals are not rewritten.
             if (broken && bdBubble < 1f)
             {
                 Vector3 sN = Vector3.ProjectOnPlane(frameUp, tangent);
@@ -2225,9 +2187,7 @@ public class WingtipVortex : MonoBehaviour
             float twist = ribbonTwistPerMetre * r.odo[src];   // frozen for the same reason
             float uy = ageFrac;
 
-            // Twist aliasing: ring spacing is speed / frame rate, so past a quarter turn per ring
-            // the rotation aliases into a sawtooth. Where a ring's spacing nears that, its section
-            // eases to a round tube of the same area.
+            // Near a quarter turn per ring the twist aliases; the section eases to a round tube.
             float seg = src > 0 ? (r.pts[src] - r.pts[src - 1]).magnitude
                       : (n > 1 ? (r.pts[1] - r.pts[0]).magnitude : 0f);
             float twistStep = ribbonTwistPerMetre * seg;
@@ -2237,6 +2197,16 @@ public class WingtipVortex : MonoBehaviour
             float majorR = radius * Mathf.Lerp(roundR, 1f, shapeKeep);
             float minorR = radius * Mathf.Lerp(roundR, ribbonAspect, shapeKeep);
             float stripeAmt = ribbonStripe * shapeKeep;
+            // Keep distant cores wide enough to cover pixels without enlarging close views.
+            if (live && radius > 0f && view != null)
+            {
+                float depth = Mathf.Max(Vector3.Dot(centre - view.transform.position, view.transform.forward), 0f);
+                float pixelRadius = 0.75f * depth * pixelScale * Mathf.Sqrt(headAlpha * endFade);
+                float resolved = Mathf.Clamp01(minorR / Mathf.Max(pixelRadius, 1e-5f));
+                majorR = Mathf.Max(majorR, pixelRadius);
+                minorR = Mathf.Max(minorR, pixelRadius);
+                stripeAmt *= resolved;
+            }
 
             // cos/sin of the twist once, then rotate the precomputed unit circle into place.
             float tc = Mathf.Cos(twist), ts = Mathf.Sin(twist);
@@ -2295,22 +2265,23 @@ public class WingtipVortex : MonoBehaviour
         // Step 2: climb to a part above this X/Z position, skipped if this is already an extremity
         // wing.
         {
-            // TryGetPartBounds, not a raw renderer lookup: this test decides whether the anchor
-            // stays on the true tip, and raw bounds included whatever effect meshes were enabled,
-            // which moved anchors after a revert.
+            // TryGetPartBounds: raw renderer bounds include effect meshes.
             Bounds rCheckB;
             if (TryGetPartBounds(wing, out rCheckB))
             {
                 float maxExt = 0f;
+                Part widest = null;
+                // Against wings only: a missile on a wingtip rail reaches past the tip.
                 foreach (var part in vessel.parts)
                 {
                     Bounds rrB;
-                    if (!TryGetPartBounds(part, out rrB)) continue;
-                    maxExt = Mathf.Max(maxExt, LateralReach(part, rrB));
+                    if (!(IsLiftPart(part) || IsControlPart(part)) || !TryGetPartBounds(part, out rrB)) continue;
+                    float e = LateralReach(part, rrB);
+                    if (e > maxExt) { maxExt = e; widest = part; }
                 }
 
                 float thisExt = LateralReach(wing, rCheckB);
-                Log($"CLIMB GATE part={wing.name} ext={thisExt:F2} vs widest={maxExt:F2} "
+                Log($"CLIMB GATE part={wing.name} ext={thisExt:F2} vs widest={maxExt:F2} ({widest?.name}) "
                           + $"— {(thisExt >= maxExt * 0.95f ? "already the tip, NO climb" : "climbing")}");
 
                 if (thisExt >= maxExt * 0.95f)
@@ -2377,15 +2348,13 @@ public class WingtipVortex : MonoBehaviour
                 if (upDot < 0.2f) continue; // only reject extreme verticals
 
                 Bounds b = pb;
-                // Projected extents, not the corners run through the transform: b.min/b.max are
-                // corners of a WORLD-aligned box, and converting those two points into a rotated
-                // frame does not give that box's extent in the new frame.
+                // Projected extents: b.min/b.max are corners of a world-aligned box.
                 Vector3 centerLocal = ToVesselFrame(b.center);
                 Vector3 halfLocal = new Vector3(ExtentAlong(b, axLateral), ExtentAlong(b, axVert), ExtentAlong(b, axLength));
                 Vector3 minLocal = centerLocal - halfLocal;
                 Vector3 maxLocal = centerLocal + halfLocal;
 
-                // RELAX: use part center height instead of bounds max (handles rotated/canted meshes)
+                // Use part-centre height for rotated or canted meshes.
                 Vector3 currCenterLocal = ToVesselFrame(currentPart.transform.position);
                 if (centerLocal.y <= currCenterLocal.y + 0.01f) continue;
 
@@ -2481,7 +2450,9 @@ public class WingtipVortex : MonoBehaviour
         // HARD FRAME PROTECTION
         bool badFrame = rawDelta > abnormalFrameThreshold;
 
-        if (!Application.isFocused)
+        // A stall (the window dragged, a save, an alt-tab that froze the game) restarts the trails;
+        // losing focus alone does not, as KSP flies on in the background.
+        if (rawDelta > stallDelta)
         {
             for (int i = 0; i < trails.Count; i++)
                 ResetVortexState(i);
@@ -2493,7 +2464,7 @@ public class WingtipVortex : MonoBehaviour
             dt = 0.01f; // clamp aggressively
 
 
-        // RECOVERY: ensure renderers come back clean after a bad frame
+        // Restore renderers after an invalid frame.
         for (int i = 0; i < trails.Count; i++)
         {
             // ...except where a tube has taken over, so its TrailRenderer is not re-enabled every
@@ -2522,14 +2493,13 @@ public class WingtipVortex : MonoBehaviour
                 Log("sources no longer belong to this vessel — re-detecting");
                 ClearSources();
                 ComputeVesselBounds();
-                FindVortexSources();
+                redetectAfterLoss = true;
+                try { FindVortexSources(); } finally { redetectAfterLoss = false; }
                 return;   // lists were just rebuilt; pick it up next frame
             }
         }
 
-        // Vacuum: the early-out fires only once there is nothing left to draw. atmFactor already
-        // takes visible to zero across the 0.01-0.10 density band and both renderers close out
-        // through their own paths, so a fade is never truncated.
+        // Vacuum early-out only once nothing is left to draw, so fades finish.
         if (vessel.atmDensity <= 0.01f && NothingLeftToDraw())
         {
             for (int i = 0; i < trails.Count; i++)
@@ -2542,9 +2512,7 @@ public class WingtipVortex : MonoBehaviour
 
         Vector3 flow = vessel.GetSrfVelocity().normalized;
 
-        // Lift-driven load factor: summed per-surface lift over weight, not felt G, which counts
-        // thrust and impacts and misses dumped lift. Under FAR, ModuleLiftingSurface is gone, so
-        // FAR's wing modules are summed instead.
+        // Load factor from summed surface lift over weight (FAR: its wing modules).
         float liftKN;
         if (FARBridge.Available)
         {
@@ -2592,9 +2560,7 @@ public class WingtipVortex : MonoBehaviour
         // Circulation model (see massSpanFactor): mass/span cached on the bounds timer, speed live.
         float circFactor = sizeFactor;
 
-        // Regime selection: line mode is kept for the extreme-velocity regime. Gated on the mode,
-        // not the renderer: suppressing only shouldUseLine would leave useLineMode flipping at
-        // lineModeSpeed and take the trail's fade to zero, leaving a booster with no wake.
+        // Line mode only for the extreme-velocity regime, gated on the mode, not the renderer.
         bool lineModeAllowed = rocketUseLineMode || verticalLauncher != 1;
         bool shouldEnterLineMode = speed >= lineModeSpeed && lineModeAllowed;
         // Forced exit as well, so a craft in line mode when focus switches to a booster hands back
@@ -2611,9 +2577,7 @@ public class WingtipVortex : MonoBehaviour
         float contrailBlend = Mathf.Clamp01((bodyContrailWarm - ambientK)
                                             / Mathf.Max(bodyContrailWarm - bodyContrailCold, 0.01f));
 
-        // Approach-vapor floor (see humidDensityMin): every term must hold at once - deep in the
-        // atmosphere, a wing near its lift limit, and the wing carrying the aircraft.
-        // How lit the wake is, 0 (night) to 1 (day); see nightFloorScale and VortexVapor.Sunlight.
+        // Approach-vapor floor needs dense air, a wing near its lift limit, and airborne.
         float sunElevation;
         float sunLit = VortexVapor.Sunlight.Fraction(vessel, out sunElevation);
         if (!loggedSunFlux)
@@ -2683,9 +2647,7 @@ public class WingtipVortex : MonoBehaviour
             }
         }
 
-        // Ground effect, vessel level. The raycast height sees runways and buildings, so it is
-        // preferred while within 50 m of radar altitude; a stale raycast reading low could fake
-        // ground effect. Over an ocean the sea surface is the ground plane.
+        // Ground height: raycast near the ground (sees runways), radar altitude otherwise; sea at sea level.
         {
             double agl = vessel.radarAltitude;
             if (vessel.heightFromTerrain >= 0f && System.Math.Abs(vessel.heightFromTerrain - agl) < 50.0)
@@ -2721,9 +2683,7 @@ public class WingtipVortex : MonoBehaviour
             }
         }
 
-        // Breakdown, vessel level. Swirl is smoothed because Gamma reads raw lift, and ropes
-        // flickering in and out of breakdown would pop. Gated on flyingGate: on the runway the CL
-        // proxy reports gear attitude.
+        // Swirl smoothed so ropes do not flicker in and out of breakdown; gated on flyingGate.
         {
             float swirlCoeff = 0.715f / (2f * Mathf.PI * Mathf.Max(viscousCoreSpanFraction, 0.001f));
             float swirlRaw = (breakdownEnable > 0f && airOk && speed > flyingSpeedMin)
@@ -2781,11 +2741,7 @@ public class WingtipVortex : MonoBehaviour
             shedWrite = (shedWrite + 1) % shedSamples;
         }
 
-        // Wake sink: a shed pair descends under its own induced flow, ~1.5 m/s early on. Nudging
-        // every vertex down each frame gives 'older has sunk further'. Commutes with
-        // OnFloatingOriginShift; trailSinkRate 0 disables.
-        // How hard the wake is winding, from load factor: floored at helixBaseDrive, full by
-        // helixGFull, faded out toward the contrail band.
+        // Helix drive from load factor: floored at helixBaseDrive, full by helixGFull.
         float helixDrive = Mathf.Lerp(helixBaseDrive, 1f,
                                       Mathf.Clamp01((g - helixGMin) / Mathf.Max(helixGFull - helixGMin, 0.01f)))
                            * (1f - contrailBlend * 0.8f);
@@ -2853,9 +2809,7 @@ public class WingtipVortex : MonoBehaviour
                             // Only vertices still opening out need touching.
                             if (dR > 0f)
                             {
-                                // Phase frozen per vertex: (now - age) is when it was laid, so the
-                                // corkscrew sits still in the air and the per-frame delta stays
-                                // radial and small.
+                                // Phase frozen per vertex, so the corkscrew sits still in the air.
                                 float th = helixOmega * (nowT - age) + phase;
                                 p += (hPerp * Mathf.Cos(th) + worldUp * (Mathf.Sin(th) * 0.6f)) * dR;
                             }
@@ -2915,9 +2869,7 @@ public class WingtipVortex : MonoBehaviour
             float atmFactor = Mathf.Clamp01((float)((vessel.atmDensity - 0.01f) / 0.09f));
             visible *= atmFactor;
 
-            // Cold air is near saturation, so the contrail floor makes the effect default-on up
-            // high. Scaled by atmFactor, or an unscaled floor would relight every vortex in orbit,
-            // and by nightScale, since no light means nothing to scatter.
+            // Contrail floor, scaled by atmFactor and nightScale.
             if (contrailBlend > 0f)
             {
                 visible = Mathf.Max(visible,
@@ -2928,11 +2880,7 @@ public class WingtipVortex : MonoBehaviour
 
             if (strengths[i] < 1f)
             {
-                // Onset interpolated by span ratio (a full-size canard near the main wing's 3 g, a
-                // small nose canard 6 g) and scaled by the same rho*V factor as the main wing, then
-                // blended toward the main wing's onset by tip likeness; at full likeness it is
-                // exactly the main-wing rule. The handicap is a multiple of the main wing's onset,
-                // so scaling both by rho*V leaves the ratio intact (see secondaryOnsetMultMin).
+                // Secondary onset by span ratio and rho*V, blended to the main wing's by tip likeness.
                 float mainLike = MainLikeness(spanRatios[i]);
                 float sizeMult = SecondaryOnsetMult(spanRatios[i]);
                 float gMin = Mathf.Lerp(onsetLoadRef * sizeMult, onsetLoadRef, mainLike) * onsetScale;
@@ -2940,10 +2888,7 @@ public class WingtipVortex : MonoBehaviour
                 float gGate = Mathf.Clamp01((g - gMin) / Mathf.Max(secondaryGSpan * onsetScale, 0.01f));
                 float vGate = Mathf.Clamp01((speed - secondarySpeedMin) / Mathf.Max(secondarySpeedFull - secondarySpeedMin, 0.01f));
 
-                // Not Lerp(gate, 1, mainLike): that bypasses a fraction of the gate, so it can
-                // never reach zero and a near-main-wing canard rendered dim and constant. Tip
-                // likeness already lowers the bar through gMin; at span ratio 0.95 and up
-                // SecondaryStrength returns 1 and this block is skipped.
+                // Not Lerp(gate, 1, mainLike): the gate must be able to reach zero.
                 float gate = gGate * vGate;
                 visible *= gate;
 
@@ -2967,9 +2912,7 @@ public class WingtipVortex : MonoBehaviour
 
             Vector3 anchorPos = AnchorPosition(i);
 
-            // Discontinuity guard: origin shifts are compensated in OnFloatingOriginShift, so
-            // anything left is a real teleport (vessel switch, docking). The anchor must not move
-            // further than its Unity-space velocity (rb_velocity, Krakensbane-relative) allows.
+            // Discontinuity guard: a jump beyond the anchor's velocity is a teleport.
             float armRadius = Vector3.Distance(anchorPos, vessel.CoM);
             float plausibleStep = (guardSpeed + vessel.angularVelocity.magnitude * armRadius)
                                   * rawDelta * 3f
@@ -2993,10 +2936,7 @@ public class WingtipVortex : MonoBehaviour
             obj.transform.position = anchorPos;
             lastFlows[i] = flow;
 
-            // Where a tube exists it owns the source outright, trail and line. Line mode exists
-            // because accumulated trail geometry outruns its resampling at extreme speed, which
-            // does not apply to a tube: ring spacing scales with speed and ribbonMaxLength bounds
-            // the rope.
+            // A tube, where present, owns the source; line mode is for trails only.
             bool hasRibbon = i < ribbons.Count && ribbons[i] != null;
             bool shouldUseLine = !hasRibbon && lineFade > 0.01f && visible > 0.01f;
             bool shouldUseTrail = !hasRibbon && trailFade > 0.01f && visible > 0.01f;
@@ -3043,10 +2983,7 @@ public class WingtipVortex : MonoBehaviour
                               + $"shader={(tm == null || tm.shader == null ? "NULL" : tm.shader.name)}");
                 }
 
-                // Low altitude: a short maneuver puff; high altitude: a long condensation trail.
-                // Vertex count is frame rate * lifetime (a TrailRenderer adds at most one point per
-                // update), which OnFloatingOriginShift rewrites every physics frame;
-                // contrailTimeMax is set against that budget.
+                // Short puff low, long contrail high; contrailTimeMax bounds the vertex budget.
                 tr.time = Mathf.Lerp(tr.time, Mathf.Min(targetTime, lifeCap), smoothDt * 2f);
 
                 // Wider vertex spacing with altitude: a contrail is close to straight.
@@ -3054,7 +2991,7 @@ public class WingtipVortex : MonoBehaviour
                                                  contrailMinVertexDist, contrailBlend);
                 tr.minVertexDistance = Mathf.Lerp(tr.minVertexDistance, targetMinDist, smoothDt * 3f);
 
-                // Never fully stop emission during bad frames (causes a forward-shooting bug).
+                // Keep minimum emission through transient invalid frames.
                 tr.emitting = true;
 
                 trailWasActive[i] = true; lineWasActive[i] = false;
@@ -3137,9 +3074,7 @@ public class WingtipVortex : MonoBehaviour
                 float altScale = Mathf.Lerp(1f, contrailWidthScale, contrailBlend);
                 ApplyShedAppearance(i, tr, trailFade * ss * altScale, contrailBlend, speed);
             }
-            // The oldest point ages until tr.time. The newest is pinned at age 0 only while
-            // shedding. A fully aged-out trail resets its recorded age span, or the history would
-            // be mapped across a new stub.
+            // An aged-out trail resets its recorded age span.
             if (tr.positionCount == 0) { trailAges[i] = 0f; trailHeadAges[i] = 0f; }
 
             trailAges[i] = Mathf.Min(trailAges[i] + dt, Mathf.Max(tr.time, 0.01f));
@@ -3223,18 +3158,10 @@ public class WingtipVortex : MonoBehaviour
                 float baseAlpha = visible * strengths[i];
                 float finalAlpha = baseAlpha * alphaBoost;
 
-                grad.SetKeys(
-                    new GradientColorKey[] {
-                        new GradientColorKey(Color.white,                0f),
-                        new GradientColorKey(new Color(0.8f,0.8f,0.8f), 0.5f),
-                        new GradientColorKey(new Color(0.6f,0.6f,0.6f), 1f)
-                    },
-                    new GradientAlphaKey[] {
-                        new GradientAlphaKey(finalAlpha,        0f),
-                        new GradientAlphaKey(finalAlpha * 0.7f, 0.5f),
-                        new GradientAlphaKey(0f,                1f)
-                    }
-                );
+                lineAlphaKeys[0] = new GradientAlphaKey(finalAlpha, 0f);
+                lineAlphaKeys[1] = new GradientAlphaKey(finalAlpha * 0.7f, 0.5f);
+                lineAlphaKeys[2] = new GradientAlphaKey(0f, 1f);
+                grad.SetKeys(lineColorKeys, lineAlphaKeys);
                 lr.colorGradient = grad;
                 lineWasActive[i] = true; trailWasActive[i] = false;
             }
@@ -3250,11 +3177,6 @@ public class WingtipVortex : MonoBehaviour
         }
     }
 
-    // Bakes the recorded shedding strength along the trail instead of one global width and alpha,
-    // so a stretch shed under 7 g keeps its strength after the pilot unloads. TrailRenderer's
-    // startWidth and endWidth are global, so widthCurve and colorGradient (0 at the head, 1 at the
-    // oldest point) are driven from a ring buffer of past intensity. Position maps to age, which
-    // coincide at constant speed.
     // Reads the ring buffer `back` samples behind the write cursor.
     float SampleShed(float[] hist, int back)
     {
@@ -3276,9 +3198,7 @@ public class WingtipVortex : MonoBehaviour
     {
         float[] hist = shedHistory[i];
 
-        // The age span the current geometry covers, which is not [0, tr.time]: just after a Clear
-        // the trail holds a fraction of a second, and once emission stops the head ages too, so the
-        // strong stretch slides toward the tail and expires.
+        // The age span the current geometry covers (not always [0, tr.time]).
         float maxHist = shedSamples * shedSampleInterval;
         float headAge = Mathf.Clamp(trailHeadAges[i], 0f, maxHist);
         float tailAge = Mathf.Clamp(Mathf.Min(trailAges[i], tr.time), 0.05f, maxHist);
@@ -3397,10 +3317,7 @@ public class WingtipVortex : MonoBehaviour
     }
 }
 
-// Gives each craft worth drawing its own WingtipVortex controller: the craft you fly, plus other
-// loaded, unpacked craft with lifting surfaces, nearest first, up to MaxControllers. Wing vapor
-// stays on the active craft only (WingVaporAddon), since it runs a per-part aerodynamic solve every
-// physics step.
+// One WingtipVortex controller per loaded craft with wings, nearest first, up to MaxControllers.
 [KSPAddon(KSPAddon.Startup.Flight, false)]
 public class WingtipVortexManager : MonoBehaviour
 {

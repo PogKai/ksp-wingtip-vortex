@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- dotnet build -c Release -p:KSPDir=<KSP install> -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <Configurations>Release</Configurations>
+    <RootNamespace>VortexVapor</RootNamespace>
+    <AssemblyName>WingtipVortex</AssemblyName>
+    <LangVersion>7.3</LangVersion>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <Deterministic>true</Deterministic>
+    <EnableSourceLink>false</EnableSourceLink>
+    <Optimize>true</Optimize>
+    <DebugType>none</DebugType>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <Managed>$(KSPDir)\KSP_x64_Data\Managed</Managed>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Source\*.cs" />
+    <Compile Include="Source\WingVapor\AeroState.cs" />
+    <Compile Include="Source\WingVapor\BDArmoryCraft.cs" />
+    <Compile Include="Source\WingVapor\Condensation.cs" />
+    <Compile Include="Source\WingVapor\CraftMeshes.cs" />
+    <Compile Include="Source\WingVapor\LiftingLine.cs" />
+    <Compile Include="Source\WingVapor\ModSettings.cs" />
+    <Compile Include="Source\WingVapor\OtherCraftVapor.cs" />
+    <Compile Include="Source\WingVapor\Planform.cs" />
+    <Compile Include="Source\WingVapor\RaymarchVapor.cs" />
+    <Compile Include="Source\WingVapor\Sunlight.cs" />
+    <Compile Include="Source\WingVapor\TrailedVorticity.cs" />
+    <Compile Include="Source\WingVapor\VaporRenderer.cs" />
+    <Compile Include="Source\WingVapor\VaporShaders.cs" />
+    <Compile Include="Source\WingVapor\WingVapor.cs" />
+    <Compile Include="Source\WingVapor\WingVaporAddon.cs" />
+    <Compile Include="Source\Aeronautic\*.cs" />
+    <Compile Include="Source\AeronauticUnity\*.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="Assembly-CSharp"><HintPath>$(Managed)\Assembly-CSharp.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine"><HintPath>$(Managed)\UnityEngine.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(Managed)\UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.PhysicsModule"><HintPath>$(Managed)\UnityEngine.PhysicsModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.IMGUIModule"><HintPath>$(Managed)\UnityEngine.IMGUIModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.InputLegacyModule"><HintPath>$(Managed)\UnityEngine.InputLegacyModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.AnimationModule"><HintPath>$(Managed)\UnityEngine.AnimationModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.ImageConversionModule"><HintPath>$(Managed)\UnityEngine.ImageConversionModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.AssetBundleModule"><HintPath>$(Managed)\UnityEngine.AssetBundleModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.ParticleSystemModule"><HintPath>$(Managed)\UnityEngine.ParticleSystemModule.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+  <Target Name="RequireKspDir" BeforeTargets="ResolveAssemblyReferences" Condition="'$(KSPDir)' == ''">
+    <Error Text="Set KSPDir to your Kerbal Space Program installation." />
+  </Target>
+</Project>

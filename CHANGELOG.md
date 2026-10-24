@@ -4,6 +4,51 @@ All notable changes to KSP Wingtip Vortex.
 
 ---
 
+## 2.0.0 — Raymarched vapor
+
+The wing vapor is rebuilt as a raymarched volume, ported from
+[aeronautic](https://github.com/Romainlg29/aeronautic) by Romain Le Gall (MIT) and fitted to KSP.
+
+### Added
+
+* **Raymarched wing vapor.** One soft cloud over the wings, computed every frame from the measured
+  airframe (wing planforms, strakes, canards and fuselage) and the pressure drop over each wing
+  station, and marched through on the GPU. It forms on the skin first and stands up from it as the
+  pull tightens, and it is lit by the sun, warm at sunrise and sunset.
+* **Angle of attack.** Cobras and other high-alpha moves condense from the angle the wing meets the
+  air, not only from g.
+* **LEX ropes.** Aircraft with strakes draw a cord of vapor from the strake's vortex, flowing
+  straight back along the airframe.
+* **Vapor over the fuselage** in the hardest pulls, spreading across the body between the wing roots.
+* **Vapor on other aircraft.** Up to three aircraft within 2 km of the camera get their own vapor.
+* **Settings window.** In flight, the app launcher button or Alt+V: vortices and vapor on or off,
+  vortex strength, vapor density and height from 0 to 200%, and a switch back to the legacy
+  particle puffs. Saved to `PluginData/settings.cfg`.
+* **Missiles and wing stores** are left out of the vapor's outline (BDArmory recognised by module
+  name; still no dependency).
+
+### Fixed
+
+* **Legacy particle vapor placement and cleanup.** Puff origins stay inside the measured wing
+  outline, velocity respects transform scale, and root changes and on-rails warp clear old particles.
+  Missing raymarch shaders now select the legacy puffs consistently.
+  Upper-surface gating and real-collider buried-face checks from 1.5 are retained.
+* **Lost wing, no false vortex.** When a wingtip anchor is broken off or destroyed, the vortices are
+  rebuilt only from what is left of the original wing; they no longer move to the tail elevators or
+  rudders or mirror the other wing's tip into empty air.
+* **The vortex line no longer allocates** two gradient key arrays per line every frame.
+
+### Changed
+
+* **Afterburner plumes**, previewed in pre-release builds, are now a separate mod,
+  [AeronauticAfterburner](https://github.com/PogKai/ksp-aeronautic-afterburner). WingtipVortex 2.0.0 draws no plumes and has no plume setting.
+* **The shader bundles** (`Shaders/wingvapor-<platform>.bundle`) ship with the mod and are required
+  for the raymarched vapor; without them it falls back to the legacy puffs.
+* **Upgrading:** delete the old `WingtipVortex` folder before copying the new one. Remove the older
+  optional Volumetric Wing Vapor add-on; its Waterfall integration is replaced by the built-in renderer.
+
+---
+
 ## 1.5.0 — In-game settings
 
 An in-game settings window, and no more wing vapor under the wings.

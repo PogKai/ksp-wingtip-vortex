@@ -23,8 +23,10 @@ Search `KSP.log` for `[VORTEX]`. The mod logs its full selection pass, including
 
 ## No wing vapor
 
+* If upgrading from 1.5, remove the older **Volumetric Wing Vapor** add-on. Its Waterfall integration has been replaced by 2.0's built-in raymarched renderer
 * It is meant to be rare. It needs a real pull, humid low air and a wing working hard for its speed, and only below about 14 km on Kerbin
-* To see what it is doing, create an empty file named `verbose.txt` in the mod's folder (next to `Plugins`), fly, and search `KSP.log` for `[VORTEX] wing vapor:`. You get the part loading, step times, which parts are condensing, and each time the altitude limit is crossed. Without that file the wing vapor logs only a few lines when a flight starts (whether FAR was found, the version, and which particle shader it is using), and one line each time it moves to another craft (`now on <craft>`) or stays put because the camera went to a missile
+* Puffs instead of a smooth cloud: check the log for `[VORTEX] wing vapor: no shader bundle` or `NOT supported`. The raymarched vapor needs `Shaders/wingvapor-<platform>.bundle` in the mod's folder (reinstall the whole folder) and a graphics API that can run it; without it the mod falls back to the legacy puffs
+* To see what it is doing, create an empty file named `verbose.txt` in the mod's folder (next to `Plugins`), fly, and search `KSP.log` for `[VORTEX] wing vapor:`. You get the part loading, step times, which parts are condensing, and each time the altitude limit is crossed. Without that file the wing vapor logs only a few lines when a flight starts (whether FAR was found, the version, and whether the raymarched shader or legacy fallback is active), and one line each time it moves to another craft (`now on <craft>`) or stays put because the camera went to a missile
 * After five errors the wing vapor switches itself off for the flight and says so in the log; the vortices are unaffected
 
 ## Core growth, ground effect and breakdown

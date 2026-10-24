@@ -3,10 +3,7 @@ using UnityEngine;
 
 namespace VortexVapor
 {
-    // How lit the air around a craft is, 0 (night) to 1 (day), shared by the vortices and the wing
-    // vapor, which both dim at night. Keyed to the sun's height above the craft's own horizon, not
-    // vessel.solarFlux, whose atmospheric absorption reads an afternoon as 20-45% lit under a
-    // bright sky.
+    // Daylight 0..1 from the sun's height over the craft's horizon.
     public static class Sunlight
     {
         // Sun elevation in degrees across which it fades from night to day.
@@ -40,6 +37,25 @@ namespace VortexVapor
             float lit = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(TwilightLow, TwilightHigh, elevation));
             if (elevation > EclipseMinElevation && v.solarFlux <= 0.0) lit = 0f;   // another body in the way
             return lit;
+        }
+
+        // Optical depths of the air straight up, red, green, blue (Rayleigh and haze, roughly).
+        static readonly Vector3 Depth = new Vector3(0.09f, 0.17f, 0.35f);
+
+        // sunlight left at an elevation (air mass), dimmed with the sun's height below 45 degrees.
+        public static Vector3 Tint(float elevationDeg)
+        {
+            float e = Mathf.Max(elevationDeg, 0f);
+            float mass = 1f / (Mathf.Sin(e * Mathf.Deg2Rad) + 0.50572f * Mathf.Pow(e + 6.07995f, -1.6364f));
+            float extra = mass - 1f;
+            return new Vector3(Mathf.Exp(-Depth.x * extra), Mathf.Exp(-Depth.y * extra), Mathf.Exp(-Depth.z * extra)) * Slant(e);
+        }
+
+        // How far KSP's frame has darkened with the sun's height (1 from 45 degrees up); the sky's
+        // light on the vapor follows it too.
+        public static float Slant(float elevationDeg)
+        {
+            return Mathf.Sqrt(Mathf.Clamp(Mathf.Sin(Mathf.Max(elevationDeg, 0f) * Mathf.Deg2Rad) / 0.7071f, 0.02f, 1f));
         }
     }
 }

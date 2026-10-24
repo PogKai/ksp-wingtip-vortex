@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/images/banner.jpg" alt="KSP Wingtip Vortex: a fighter in a hard bank trailing two wingtip vortices, with wing vapor at the wings" width="100%">
+<img src="docs/images/banner.jpg" alt="Su-57 approaching over sunset clouds with upper-wing vapor and paired wingtip vortices" width="100%">
 
 <br>
 
@@ -18,12 +18,12 @@
 
 ## What it does
 
-Fly. That's it: no per-craft setup, and nothing you have to configure.
+Install it and fly: both effects work automatically, with no per-craft setup. An optional in-flight panel lets you tune or disable them.
 
 | | |
 |---|---|
 | **Wingtip vortices** | Twin vortex trails curl in behind the wingtips, stronger the harder the wing is working. On your craft and every aircraft around you, AI wingmen and BDArmory opponents included. Works on multi-part wings, canards and rockets |
-| **Wing vapor** | The white sheet over the wings in a hard pull. It is *hard to get*, on purpose |
+| **Wing vapor** | A raymarched cloud over the wings in a hard pull, with LEX ropes and vapor over the fuselage. It is *hard to get*, on purpose |
 | **Wake behaviour** | Trails spread as they age, the ground pushes them apart, and a heavily loaded core can burst |
 
 <br>
@@ -34,41 +34,18 @@ Fly. That's it: no per-craft setup, and nothing you have to configure.
 2. Copy the `WingtipVortex` folder (inside the zip's `GameData`) into your KSP `GameData/`
 3. Fly
 
-KSP 1.12.x · no dependencies · to upgrade, replace the folder · to remove, delete it.
+KSP 1.12.x · no dependencies · to upgrade, delete the old `WingtipVortex` folder first, then copy the new one · to remove, delete it.
+
+Upgrading from 1.5 with the optional **Volumetric Wing Vapor** add-on? Remove that older add-on too: 2.0 includes its own volumetric renderer and no longer uses the Waterfall integration.
 
 <br>
 
-## Add-on: Volumetric Wing Vapor
+## New in 2.0.0
 
-[Volumetric Wing Vapor](https://github.com/PogKai/ksp-volumetric-wing-vapor) is a separate, optional mod that draws the wing vapor as one soft volumetric cloud over each wing, in place of the puffs, using [Waterfall](https://github.com/post-kerbin-mining-corporation/Waterfall)'s shader. It needs this mod (1.5.0 or later) and Waterfall.
-
-* **When it is installed**, the settings window gains a **Volumetric cloud (Waterfall)** switch, to turn the cloud off and go back to the puffs or on again, and a thickness slider for the cloud
-* **Without it**, nothing changes: the window shows neither, the vapor is the puffs, and this mod still has no dependencies
-
-<br>
-
-## New in 1.5.0
-
-* **In-game settings**: a window on the app launcher (or Alt+V) to switch the vortices and the wing vapor on or off and set their intensity
-* **No vapor under the wings** or in a negative-g push
-* **Ready for [Volumetric Wing Vapor](https://github.com/PogKai/ksp-volumetric-wing-vapor)**, an optional add-on that draws the wing vapor as a volumetric cloud
-* Everything else in the [changelog](CHANGELOG.md)
-
-<br>
-
-## New in 1.4.1
-
-* **Smooth wake in a hard pull**: the tube no longer draws a sawtooth, one tooth per frame, in a 7+ g pull at speed
-* **Wing vapor is more even** over the wing and rests on its upper surface
-* Everything else in the [changelog](CHANGELOG.md)
-
-<br>
-
-## New in 1.4.0
-
-* **Ferram Aerospace Research support**: vortices and wing vapor read FAR's own per-wing lift and stall. Still no dependency, and stock behaves as before
-* **Contrails spread near their end** at altitude, wide and soft, like a real contrail once its vortices break up
-* **No more zigzag** on a fast jet in a hard pull: the wake follows the rigid airframe, not the flexing wingtip
+* **Raymarched wing vapor**: the vapor is now one soft volume over the wings, ported from [aeronautic](https://github.com/Romainlg29/aeronautic). It stands up from the skin as the pull tightens, follows the angle of attack in a cobra, draws LEX ropes off strakes and spreads over the fuselage in the hardest pulls
+* **Vapor on other aircraft**: up to three aircraft near the camera get their own vapor, so formations and dogfights show it on every jet
+* **Lit by the sun**, warm at sunrise and sunset; the old puffs stay available as a legacy option
+* Afterburner plumes, previewed in pre-release builds, are now their own mod, [AeronauticAfterburner](https://github.com/PogKai/ksp-aeronautic-afterburner)
 * Everything else in the [changelog](CHANGELOG.md)
 
 <br>
@@ -87,7 +64,7 @@ Both effects are limited by air density, not height, so the limits fall at a dif
 
 * Works with **stock aerodynamics** or **Ferram Aerospace Research** (tested with FAR 0.16.2), detected automatically
 * Works alongside Scatterer, EVE, Parallax, Deferred, Singularity and Kopernicus
-* **In-game settings:** in flight, click the vortex button on the app launcher (or press **Alt+V**) to switch the wingtip vortices and the wing vapor on or off and set each one's intensity from 0 to 200%. 100% is the default look. Choices are saved to `PluginData/settings.cfg` in the mod's folder. With the [Volumetric Wing Vapor](https://github.com/PogKai/ksp-volumetric-wing-vapor) add-on installed, the window also has a switch for the volumetric cloud
+* **In-game settings:** in flight, click the vortex button on the app launcher (or press **Alt+V**) to switch the wingtip vortices and the wing vapor on or off, set the vortex strength and the vapor's density and height from 0 to 200%, or switch the vapor back to the legacy particle puffs. 100% is the default look. Choices are saved to `PluginData/settings.cfg` in the mod's folder
 
 <br>
 
@@ -98,7 +75,7 @@ Both effects are limited by air density, not height, so the limits fall at a dif
 | [How it works](docs/how-it-works.md) | The physics behind the vortices and the wake |
 | [Wing vapor](docs/wing-vapor.md) | How it forms, what to expect, and its limits |
 | [Troubleshooting](docs/troubleshooting.md) | Logs, known issues, and how to report a problem |
-| [Design notes](docs/design-notes.md) | The reasoning behind the code, moved out of its comments |
+| [Implementation reference](docs/implementation.md) | Where each effect is implemented and how the runtime pieces connect |
 | [Changelog](CHANGELOG.md) | Every release |
 
 <br>
@@ -124,22 +101,21 @@ Versions up to 1.2.0 were released under MIT and stay under it. Everything after
 
 <br>
 
-## Free, always
+## Credits
 
-Every version of this mod is free. I have never charged for it and never will. If you paid for it anywhere, that money didn't go to me. Get it from the [official releases](https://github.com/PogKai/ksp-wingtip-vortex/releases) or the [forum thread](https://forum.kerbalspaceprogram.com/topic/230208-ksp-vorticescontrails-mod-release/#comment-4508713).
+WingtipVortex's raymarched wing-vapor system is based on and ported from [aeronautic](https://github.com/Romainlg29/aeronautic) by Romain Le Gall. The upstream code is used under the MIT License; exact source revisions, copyright and license text are retained in [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES.md), and each ported file names its upstream source.
 
 <br>
 
-## AI disclosure
+## Building from source
 
-This mod was built with help from Claude, Anthropic's AI assistant.
+`dotnet build WingtipVortex.csproj -c Release -p:KSPDir="<your KSP folder>"` builds `bin/Release/WingtipVortex.dll`. The platform shader bundles in `Shaders/` are included ready to use. Their source is in `Source/Shaders/` and targets Unity 2019.4.18f1 (KSP 1.12).
 
-| | |
-|---|---|
-| **With Claude** | Research support, baseline code, and debugging |
-| **Me (PogKai)** | The ideas and the direction of the project, my own research, core integration into KSP, and all in-game testing |
+<br>
 
-Every feature was tested and tuned by hand in game before it shipped.
+## Free, always
+
+Every version of this mod is free. I have never charged for it and never will. If you paid for it anywhere, that money didn't go to me. Get it from the [official releases](https://github.com/PogKai/ksp-wingtip-vortex/releases) or the [forum thread](https://forum.kerbalspaceprogram.com/topic/230208-ksp-vorticescontrails-mod-release/#comment-4508713).
 
 <br>
 
@@ -148,18 +124,3 @@ Every feature was tested and tuned by hand in game before it shipped.
 CC BY-NC-SA 4.0 · by PogKai
 
 </div>
-
-<!--
-Screenshot slots: add images to docs/images/ and uncomment.
-
-<table>
-<tr>
-<td><img src="docs/images/vapor.jpg" alt="Wing vapor in a hard pull"></td>
-<td><img src="docs/images/vortex-approach.jpg" alt="Vortices on a slow approach"></td>
-</tr>
-<tr>
-<td align="center"><sub>Wing vapor in a hard pull</sub></td>
-<td align="center"><sub>Vortices on a slow approach</sub></td>
-</tr>
-</table>
--->

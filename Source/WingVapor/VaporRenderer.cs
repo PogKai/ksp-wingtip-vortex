@@ -3,11 +3,7 @@ using UnityEngine;
 
 namespace VortexVapor
 {
-    // Draws the wing vapor WingVapor computes: short-lived soft puffs over the condensing points of
-    // every lifting part, all in one particle system riding the vessel's root part (local
-    // simulation space), so there is no floating-origin correction. Puffs drift aft, drawing the
-    // sheet streaming off the trailing edge. Stock shaders only; the puff texture is generated
-    // here.
+    // Particle puffs over condensing points, in the root part's local space.
     public class VaporRenderer
     {
         // Puffs per second per square metre of fully condensing wing.
@@ -26,16 +22,6 @@ namespace VortexVapor
         // A puff's size over its life, as a multiple of its start size.
         public const float SizeStart = 0.7f, SizeEnd = 1.5f;
 
-        // A companion mod can draw the vapor in place of the puffs.
-        public interface IDrawer
-        {
-            // Draws this frame's vapor; false leaves it to the puffs. `scale` is the player's
-            // intensity.
-            bool Draw(List<Source> active, Vessel vessel, Vector3 down, Color tint, float scale, float dt);
-            void Clear();
-        }
-        public static IDrawer Drawer;
-
         public class Source
         {
             public Part part;
@@ -51,22 +37,31 @@ namespace VortexVapor
         ParticleSystem ps;
         Part root;
         static Material material;
+        // Clear emission state once condensation stops.
+        bool drawn;
 
         public int LiveParticles { get { return ps != null ? ps.particleCount : 0; } }
+
+        void Idle()
+        {
+            if (go != null || drawn) Clear();
+        }
 
         // Emits this frame's puffs. `down` is the unit direction the air moves past the aircraft;
         // `light` 0..1 is how sunlit the air around the vessel is.
         public void Emit(Vessel vessel, Vector3 down, float light, float dt)
         {
-            if (vessel == null || dt <= 0f || vessel.rootPart == null) return;
+            if (vessel == null || vessel.rootPart == null) { Idle(); return; }
+            if (dt <= 0f) return;
+            // A reroot invalidates all particles expressed in the previous root's coordinates.
+            if (root != null && root != vessel.rootPart) Clear();
             // Nothing condensing (the usual case, and always above the vapor's altitude): no work,
-            // and no particle system on the vessel.
-            if (WingVapor.Fields.Count == 0) { if (go != null) Clear(); return; }
+            // and nothing on the vessel.
+            if (WingVapor.Fields.Count == 0) { Idle(); return; }
             // Player intensity (ModSettings): scales puff opacity, not count. Off at zero.
             float userScale = ModSettings.VaporScale;
-            if (userScale <= 0.01f) { if (go != null) Clear(); return; }
-            EnsureMaterial();
-            EnsureSystem(vessel.rootPart);
+            if (userScale <= 0.01f) { Idle(); return; }
+            drawn = true;
             // WingtipVortex's night floor: 0.2 of daylight brightness in full shadow.
             Color tint = Color.Lerp(new Color(0.19f, 0.2f, 0.23f), new Color(0.97f, 0.97f, 1f), light);
 
@@ -88,7 +83,7 @@ namespace VortexVapor
                 src.box = AeroState.GetBox(src.part);
                 if (src.box == null || src.box.planform == null) continue;
                 Planform pf = src.box.planform;
-                if (pf.samples.Length != f.density.Length) continue;
+                if (pf.samples.Length == 0 || pf.samples.Length != f.density.Length) continue;
                 if (src.weights.Length != pf.samples.Length) src.weights = new float[pf.samples.Length];
                 float sum = 0f;
                 for (int j = 0; j < pf.samples.Length; j++)
@@ -104,7 +99,8 @@ namespace VortexVapor
                 wanted += sum * (pf.area / pf.samples.Length) * PuffsPerSquareMetre;
                 active.Add(src);
             }
-            if (Drawer != null && Drawer.Draw(active, vessel, down, tint, userScale, dt)) return;
+            EnsureMaterial();
+            EnsureSystem(vessel.rootPart);
             if (active.Count == 0) return;
 
             float scale = wanted > MaxPuffsPerSecond ? MaxPuffsPerSecond / wanted : 1f;
@@ -131,28 +127,24 @@ namespace VortexVapor
                     // sheet covers the wing evenly.
                     int j = Pick(src.weights, (k + Random.value) / count * src.sum);
                     Vector2 q = pf.samples[j] + new Vector2(Random.Range(-0.5f, 0.5f), Random.Range(-0.5f, 0.5f)) * cell;
+                    if (!pf.Contains(q)) q = pf.ClosestOnHull(q);
                     float side = f.sampleSide[j];
                     float life = Random.Range(MinLife, MaxLife);
                     float drift = f.sectionChord[j] * (1f - f.chordFrac[j] + PastTrailingEdge);
-                    // Thin vapor is faint and fine-grained: opacity and size both grow with
-                    // density, so condensation reads as a haze along the leading edge and thickens
-                    // smoothly.
+                    // Opacity and size grow with density.
                     float d = f.density[j];
                     Color c = tint;
                     c.a = Mathf.Clamp01(PuffAlpha * userScale * Mathf.Lerp(0.08f, 1f, d));
                     float grain = Mathf.Lerp(0.45f, 1f, d);
                     float size = Mathf.Clamp(cell * Random.Range(1.6f, 2.6f) * sizeBoost * grain, 0.15f, 3f * sizeBoost);
-                    // Vapor forms on the suction (upper) surface only. A puff starts resting on the
-                    // skin (centre one start-radius up) and rises at the rate its radius grows
-                    // (SizeStart..SizeEnd), so its lower edge stays on the surface for its whole
-                    // life.
+                    // Puffs start on the skin and rise as they grow, lower edge on the surface.
                     float rise = 0.5f * size * (SizeEnd - SizeStart) / life;
                     Vector3 world = fr.ToWorld(q) + fr.n * (side * (0.5f * pf.thickness + 0.5f * size * SizeStart));
                     Vector3 vel = down * (drift / life) + fr.n * (side * rise);
                     var ep = new ParticleSystem.EmitParams
                     {
                         position = local.InverseTransformPoint(world),
-                        velocity = local.InverseTransformDirection(vel),
+                        velocity = local.InverseTransformVector(vel),
                         startLifetime = life,
                         startSize = size,
                         rotation = Random.Range(0f, 360f),
@@ -184,7 +176,6 @@ namespace VortexVapor
         void EnsureSystem(Part rootPart)
         {
             if (go != null && root == rootPart) return;
-            Clear();
             root = rootPart;
 
             go = new GameObject("WingVapor");
@@ -268,7 +259,7 @@ namespace VortexVapor
             go = null;
             ps = null;
             root = null;
-            if (Drawer != null) Drawer.Clear();
+            drawn = false;
             sources.Clear();
         }
     }

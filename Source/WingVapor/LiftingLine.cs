@@ -3,14 +3,7 @@ using UnityEngine;
 
 namespace VortexVapor
 {
-    // Prandtl's lifting line over the airframe's panels, which stock aerodynamics leaves out (every
-    // part lifts as if alone in the flow).
-    // Each panel is one horseshoe: Gamma_i = Gamma2D_i + pi c_i (v_i . l_i), where v_i is induced
-    // by every trailing line of its structure, averaged over the panel's span (a closed form). The
-    // system is linear in Gamma, so it is factorised when the geometry or flow direction is
-    // refreshed and back-substituted every step. Each connected structure is then scaled back to
-    // its stock lift; only the spanwise distribution comes from here.
-    // Pure math on plain arrays, so it can be checked offline.
+    // Prandtl's lifting line over the panels; only the spanwise distribution is used.
     public class LiftingLine
     {
         double[] lu = new double[0];
@@ -135,9 +128,7 @@ namespace VortexVapor
                 absStock[comp[i]] += Mathf.Abs(w * gStock[i]);
                 absSolved[comp[i]] += Mathf.Abs(w * gamma[i]);
             }
-            // Per structure: the lifting-line answer if plausible, else shared area alone, else
-            // stock's loading. Plausible means a sane scale to reach stock's lift and no more than
-            // 1.5x stock's total circulation.
+            // Per structure: lifting line if plausible, else shared area, else stock.
             Fallbacks = 0;
             for (int c = 0; c < np; c++)
             {
@@ -168,10 +159,7 @@ namespace VortexVapor
         float[] absStock = new float[0], absSolved = new float[0], scale = new float[0];
         int[] mode = new int[0];
 
-        // Normal-to-lift velocity per unit circulation of a semi-infinite trailing line at gPos
-        // (core a), averaged over the panel's span: ln(((hs - sg)^2 + H^2) / ((hs + sg)^2 + H^2)) /
-        // (4 hs), times 1/(4 pi), with sg along the span from the panel's centre and H the line's
-        // offset from the span line. Positive means upwash along l = down x span.
+        // Induced velocity per unit circulation of a trailing line, averaged over the panel span.
         public static double Kernel(Vector3 center, Vector3 span, float halfSpan, Vector3 gPos, float core, Vector3 down)
         {
             Vector3 d = gPos - center;

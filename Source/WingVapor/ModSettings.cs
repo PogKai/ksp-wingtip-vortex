@@ -7,21 +7,14 @@ using Debug = UnityEngine.Debug;
 
 namespace VortexVapor
 {
-    // Player switches and intensity dials for the two effects, saved to
-    // GameData/<mod>/PluginData/settings.cfg. The dials multiply the final drawn strength and move
-    // no physics threshold; off is a scale of zero, so what is in the air ages out.
+    // Player toggles and intensity dials, saved to PluginData/settings.cfg.
     public static class ModSettings
     {
         public const float MaxIntensity = 2f;
 
         static bool loaded;
-        static bool vortexOn = true, vaporOn = true;
-        static float vortexIntensity = 1f, vaporIntensity = 1f;
-
-        // For a companion mod: rows drawn under the wing vapor's (the argument is whether the
-        // vapor is on), and a call when the player resets to defaults.
-        public static Action<bool> VaporRows;
-        public static Action Defaults;
+        static bool vortexOn = true, vaporOn = true, vaporSheet = true;
+        static float vortexIntensity = 1f, vaporIntensity = 1f, sheetDepth = 1f;
 
         // Set by the setters; the window saves shortly after the last change.
         public static bool Dirty;
@@ -36,16 +29,20 @@ namespace VortexVapor
         public static float VortexIntensity { get { Ensure(); return vortexIntensity; } set { Ensure(); value = Clamp(value); if (vortexIntensity != value) { vortexIntensity = value; Touch(); } } }
         public static float VaporIntensity { get { Ensure(); return vaporIntensity; } set { Ensure(); value = Clamp(value); if (vaporIntensity != value) { vaporIntensity = value; Touch(); } } }
 
+        // Wing vapor raymarched (true) or drawn as the legacy particle puffs (false), and how high the
+        // raymarched vapor stands off the wing, as a share of the default.
+        public static bool VaporSheet { get { Ensure(); return vaporSheet; } set { Ensure(); if (vaporSheet != value) { vaporSheet = value; Touch(); } } }
+        public static float SheetDepth { get { Ensure(); return sheetDepth; } set { Ensure(); value = Clamp(value); if (sheetDepth != value) { sheetDepth = value; Touch(); } } }
+
         static float Clamp(float v) { return Mathf.Clamp(v, 0f, MaxIntensity); }
         static void Touch() { Dirty = true; ChangedAt = Time.unscaledTime; }
 
         public static void ResetToDefaults()
         {
             Ensure();
-            vortexOn = vaporOn = true;
-            vortexIntensity = vaporIntensity = 1f;
+            vortexOn = vaporOn = vaporSheet = true;
+            vortexIntensity = vaporIntensity = sheetDepth = 1f;
             Touch();
-            if (Defaults != null) Defaults();
         }
 
         static void Ensure()
@@ -62,6 +59,8 @@ namespace VortexVapor
                 vaporOn = ReadBool(node, "vaporEnabled", true);
                 vortexIntensity = Clamp(ReadFloat(node, "vortexIntensity", 1f));
                 vaporIntensity = Clamp(ReadFloat(node, "vaporIntensity", 1f));
+                vaporSheet = ReadBool(node, "vaporSheet", true);
+                sheetDepth = Clamp(ReadFloat(node, "sheetDepth", 1f));
             }
             catch (Exception e) { Debug.Log("[VORTEX] settings: could not read, using defaults: " + e.Message); }
         }
@@ -79,6 +78,8 @@ namespace VortexVapor
                 node.AddValue("vaporEnabled", vaporOn.ToString());
                 node.AddValue("vortexIntensity", vortexIntensity.ToString("F2", CultureInfo.InvariantCulture));
                 node.AddValue("vaporIntensity", vaporIntensity.ToString("F2", CultureInfo.InvariantCulture));
+                node.AddValue("vaporSheet", vaporSheet.ToString());
+                node.AddValue("sheetDepth", sheetDepth.ToString("F2", CultureInfo.InvariantCulture));
                 node.Save(path);
             }
             catch (Exception e) { Debug.Log("[VORTEX] settings: could not save: " + e.Message); }
@@ -143,7 +144,7 @@ namespace VortexVapor
         void AddButton()
         {
             if (button != null || ApplicationLauncher.Instance == null) return;
-            if (icon == null) icon = LoadIcon() ?? MakeIcon();
+            if (icon == null) icon = MakeIcon();
             button = ApplicationLauncher.Instance.AddModApplication(
                 OnOpen, OnClose, null, null, null, null, ApplicationLauncher.AppScenes.FLIGHT, icon);
         }
@@ -181,35 +182,48 @@ namespace VortexVapor
         {
             if (!open || uiHidden) return;
             GUI.skin = HighLogic.Skin;
-            rect = GUILayout.Window(WindowId, rect, Draw, "Wingtip Vortex " + global::WingtipVortex.ModVersion, GUILayout.Width(290f));
+            rect = GUILayout.Window(WindowId, rect, Draw, "Wingtip Vortex " + global::WingtipVortex.ModVersion, GUILayout.Width(300f));
             rect.x = Mathf.Clamp(rect.x, 0f, Screen.width - 60f);
             rect.y = Mathf.Clamp(rect.y, 0f, Screen.height - 40f);
         }
 
         void Draw(int id)
         {
-            GUILayout.Space(4f);
-            ModSettings.VortexOn = GUILayout.Toggle(ModSettings.VortexOn, " Wingtip vortices");
-            ModSettings.VortexIntensity = IntensityRow("Intensity", ModSettings.VortexIntensity, ModSettings.VortexOn);
-            GUILayout.Space(6f);
-            ModSettings.VaporOn = GUILayout.Toggle(ModSettings.VaporOn, " Wing vapor");
-            ModSettings.VaporIntensity = IntensityRow("Intensity", ModSettings.VaporIntensity, ModSettings.VaporOn);
-            if (ModSettings.VaporRows != null) ModSettings.VaporRows(ModSettings.VaporOn);
-            GUILayout.Space(8f);
+            if (heading == null) heading = new GUIStyle(GUI.skin.toggle) { richText = true };
+            if (note == null) note = new GUIStyle(GUI.skin.label) { fontSize = 11, wordWrap = true };
 
+            GUILayout.Space(4f);
+            ModSettings.VortexOn = GUILayout.Toggle(ModSettings.VortexOn, " <b>Wingtip vortices</b>", heading);
+            ModSettings.VortexIntensity = IntensityRow("Strength", ModSettings.VortexIntensity, ModSettings.VortexOn);
+
+            GUILayout.Space(8f);
+            ModSettings.VaporOn = GUILayout.Toggle(ModSettings.VaporOn, " <b>Wing vapor</b>", heading);
+            ModSettings.VaporIntensity = IntensityRow("Density", ModSettings.VaporIntensity, ModSettings.VaporOn);
+            bool raymarched = !Legacy;
+            ModSettings.SheetDepth = IntensityRow("Height", ModSettings.SheetDepth, ModSettings.VaporOn && raymarched);
+            bool wasEnabled = GUI.enabled;
+            GUI.enabled = wasEnabled && ModSettings.VaporOn;
+            ModSettings.VaporSheet = !GUILayout.Toggle(Legacy, " Legacy particle vapor");
+            GUI.enabled = wasEnabled;
+            if (Legacy && ModSettings.VaporOn) GUILayout.Label("The older puff effect, in place of the raymarched vapor.", note);
+
+            GUILayout.Space(10f);
             GUILayout.BeginHorizontal();
-            if (GUILayout.Button("Reset")) ModSettings.ResetToDefaults();
+            if (GUILayout.Button("Defaults")) ModSettings.ResetToDefaults();
             if (GUILayout.Button("Close"))
             {
                 if (button != null) button.SetFalse(true); else OnClose();
             }
             GUILayout.EndHorizontal();
-            GUILayout.Label("Alt+V toggles this window. 100% is the default look.");
+            GUILayout.Label("Alt+V opens and closes this window. 100% is the default look.", note);
             GUI.DragWindow();
         }
 
+        GUIStyle heading, note;
+        static bool Legacy { get { return !ModSettings.VaporSheet; } }
+
         // 0 to MaxIntensity in 5% steps, snapping to 100%; greyed out while its effect is off.
-        public static float IntensityRow(string label, float value, bool enabled)
+        static float IntensityRow(string label, float value, bool enabled)
         {
             bool wasEnabled = GUI.enabled;
             GUI.enabled = wasEnabled && enabled;
@@ -225,41 +239,55 @@ namespace VortexVapor
             return Mathf.Abs(v - 1f) < 0.06f ? 1f : v;
         }
 
-        // Textures/icon.png next to the Plugins folder; null if missing, and MakeIcon stands in.
-        static Texture2D LoadIcon()
-        {
-            try
-            {
-                string plugins = Path.GetDirectoryName(typeof(ModSettings).Assembly.Location);
-                string path = plugins != null ? Path.Combine(Path.Combine(Path.GetDirectoryName(plugins), "Textures"), "icon.png") : null;
-                if (path == null || !File.Exists(path)) return null;
-                var tex = new Texture2D(2, 2, TextureFormat.ARGB32, false);
-                return tex.LoadImage(File.ReadAllBytes(path)) ? tex : null;
-            }
-            catch (Exception e) { Debug.Log("[VORTEX] settings: could not load the icon: " + e.Message); return null; }
-        }
-
-        // White vortex spiral, 38x38 like the stock launcher icons; drawn here as a fallback.
+        // A wing seen from ahead with its tip vortex rolling up off the tip, white, 38x38 like the
+        // stock launcher icons; drawn here (4x4 samples a pixel), no asset to ship.
         static Texture2D MakeIcon()
         {
-            const int n = 38;
+            const int n = 38, sub = 4, coil = 240;
+            // The wing, root at the left edge tapering to the tip; KSP's textures run bottom-up.
+            var wing = new[] { new Vector2(1f, 21f), new Vector2(15f, 19.7f), new Vector2(15f, 18.3f), new Vector2(1f, 16f) };
+            // The vortex: a spiral out from its core to the tip, 2.4 turns.
+            var spiral = new Vector2[coil];
+            for (int k = 0; k < coil; k++)
+            {
+                float f = 1f - k / (coil - 1f);
+                float r = 0.6f + 9.9f * f, a = Mathf.PI + f * 2.4f * 2f * Mathf.PI;
+                spiral[k] = new Vector2(25.5f + r * Mathf.Cos(a), 19f - r * Mathf.Sin(a));
+            }
             var tex = new Texture2D(n, n, TextureFormat.ARGB32, false);
             var px = new Color[n * n];
-            float c = (n - 1) * 0.5f;
             for (int y = 0; y < n; y++)
                 for (int x = 0; x < n; x++)
                 {
-                    float dx = x - c, dy = y - c;
-                    float r = Mathf.Sqrt(dx * dx + dy * dy);
-                    float turn = Mathf.Atan2(dy, dx) / Mathf.PI + r / 9f;   // two arms
-                    float t = turn - Mathf.Floor(turn);
-                    float arm = 1f - Mathf.SmoothStep(0f, 0.2f, Mathf.Min(t, 1f - t));
-                    float edge = 1f - Mathf.SmoothStep(13f, 17f, r);
-                    px[y * n + x] = new Color(1f, 1f, 1f, arm * edge);
+                    float sum = 0f;
+                    for (int sy = 0; sy < sub; sy++)
+                        for (int sx = 0; sx < sub; sx++)
+                        {
+                            var q = new Vector2(x + (sx + 0.5f) / sub, y + (sy + 0.5f) / sub);
+                            float near = float.MaxValue;
+                            for (int k = 0; k + 1 < coil; k++) near = Mathf.Min(near, SegmentDistance(q, spiral[k], spiral[k + 1]));
+                            sum += Inside(q, wing) ? 1f : Mathf.Clamp01(1.5f - near);
+                        }
+                    px[y * n + x] = new Color(1f, 1f, 1f, sum / (sub * sub));
                 }
             tex.SetPixels(px);
             tex.Apply();
             return tex;
+        }
+
+        static bool Inside(Vector2 p, Vector2[] poly)
+        {
+            bool c = false;
+            for (int i = 0, j = poly.Length - 1; i < poly.Length; j = i++)
+                if ((poly[i].y > p.y) != (poly[j].y > p.y) && p.x < (poly[j].x - poly[i].x) * (p.y - poly[i].y) / (poly[j].y - poly[i].y) + poly[i].x) c = !c;
+            return c;
+        }
+
+        static float SegmentDistance(Vector2 p, Vector2 a, Vector2 b)
+        {
+            Vector2 ab = b - a;
+            float t = Mathf.Clamp01(Vector2.Dot(p - a, ab) / Mathf.Max(ab.sqrMagnitude, 1e-6f));
+            return (p - (a + t * ab)).magnitude;
         }
     }
 }

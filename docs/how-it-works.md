@@ -4,7 +4,7 @@
 
 This page is the physics behind the vortices and the wake. You don't need any of it to use the mod: it is here for the curious, and for anyone reporting a problem.
 
-**On this page:** [Vortices](#vortices) · [Wake physics (1.2.0)](#wake-physics-120) · [Performance](#performance) · [Roadmap](#roadmap)
+**On this page:** [Vortices](#vortices) · [Wake physics](#wake-physics) · [Performance](#performance) · [Roadmap](#roadmap)
 
 For the wing vapor, see [wing-vapor.md](wing-vapor.md).
 
@@ -34,7 +34,7 @@ Visibility is condensation, not circulation, so two saturation floors sit on top
 
 Detection re-runs by itself when it needs to (on staging, part loss or docking), so a wake never keeps drawing from parts that have left the craft.
 
-### Every aircraft (1.3.0)
+### Every aircraft
 
 Each craft gets its own vortex controller, bound to it for its whole life: the one you fly, plus other loaded aircraft with lifting surfaces, nearest first, up to ten in all. Debris, EVA kerbals, flags and BDArmory missiles are skipped. Because each wake belongs to its own craft, switching vessels touches no wake at all: the craft you leave keeps its trails, and the one you take over already has its own.
 
@@ -54,7 +54,7 @@ The airframe is measured in the craft's own frame, so span and the wingtip searc
 
 ---
 
-## Wake physics (1.2.0)
+## Wake physics
 
 Three pieces of real physics act on the vortices themselves.
 
@@ -68,7 +68,7 @@ There is no laminar/turbulent switch, on purpose: across every flight case that 
 
 Each effect logs a one-shot line the first time it engages, and `[VORTEX] session peaks` summarises the flight when you leave it. The breakdown thresholds are literature values applied to an estimated swirl, so that line is what says whether they are in the right place.
 
-**FAR:** Ferram Aerospace Research replaces the stock lifting modules, so wings are also found by FAR's own (`FARWingAerodynamicModel`, `FARControllableSurface`), and each wing's force is read from it by reflection, with no dependency on FAR. The load factor sums the wings' lift, as under stock, rather than FAR's whole-vessel force, which includes fuselage body lift. The wing vapor reads each wing's lift and stall; a stalled wing loses its leading-edge suction peak. Two vapor readings are FAR-only, because FAR flies the wing at a real angle of attack: the suction peak is also capped where the flow over the wing would reach local Mach 1.35, and clipped panels are read at their full chord (FAR's own lift coefficient) rather than their unshared share. Under stock both stay as in 1.3.0.
+**FAR:** Ferram Aerospace Research replaces the stock lifting modules, so wings are also found by FAR's own (`FARWingAerodynamicModel`, `FARControllableSurface`), and each wing's force is read from it by reflection, with no dependency on FAR. The load factor sums the wings' lift, as under stock, rather than FAR's whole-vessel force, which includes fuselage body lift. The wing vapor reads each wing's lift and stall; a stalled wing loses its leading-edge suction peak. Two vapor readings are FAR-only, because FAR flies the wing at a real angle of attack: the suction peak is also capped where the flow over the wing would reach local Mach 1.35, and clipped panels are read at their full chord (FAR's own lift coefficient) rather than their unshared share. The stock aerodynamic path remains independent of FAR.
 
 **Rigid wake anchor:** the wake follows each wingtip's offset from the root part, captured when the vortex source is set up, not the tip part itself. KSP's part joints let a many-part wing flex by up to 2 m at the tip in a hard pull, and a wake that recorded it zigzagged. `session peaks` reports the flex removed as `tip flex peak`.
 
@@ -81,12 +81,3 @@ Each effect logs a one-shot line the first time it engages, and `[VORTEX] sessio
 * One controller per aircraft, capped at ten, nearest first: each rebuilds its own tube meshes every frame, so a large BDArmory match costs more than a duel
 * Cross-section geometry uses a precomputed unit-circle table
 * The wing vapor's cost is on [its own page](wing-vapor.md#performance)
-
----
-
-## Roadmap
-
-* Better handling for extreme geometry and modded parts
-* Optional debug visualization for vortex spawn points
-* Manual placement / override system
-* Further refinement of curl and dissipation behavior

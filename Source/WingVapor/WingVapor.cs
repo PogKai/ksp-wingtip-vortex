@@ -8,6 +8,7 @@ namespace VortexVapor
     {
         public long id;
         public float[] density;     // 0..1 per planform sample, smoothed in time
+        public float[] suction;     // Pa per planform sample, smoothed in time
         public float[] chordFrac;   // 0 leading edge .. 1 trailing edge, per sample
         public float[] camberShape, peakShape;   // Condensation's chordwise shapes at chordFrac
         public float[] sampleSide;  // +1 or -1 per sample: which side of the plane is sucked there
@@ -15,9 +16,7 @@ namespace VortexVapor
         public float[] sectionChord;   // per sample: the chord of the wing section it sits on, m
         public int[] stripOf;       // per sample: which span strip of the part it lies in
 
-        // The wing section through each span strip: every lifting part the flow line through the
-        // strip crosses (members stripStart[b] .. stripStart[b + 1] - 1). Every sample of a strip
-        // shares them, so the search and the per-step sums are done per strip, not per sample.
+        // Lifting parts crossed by each span strip's flow line.
         public int[] stripStart = new int[WingVapor.Strips + 1];
         public int[] memberIdx = new int[0];       // the member's index in the surface list (valid until the part set changes)
         public float[] memberFrac = new float[0];  // where the strip sits across that part's span range, 0..1
@@ -36,11 +35,7 @@ namespace VortexVapor
         public bool seen;
     }
 
-    // Where the wing vapor forms. No KSP types, so it can be checked offline.
-    // No detection and no anchors: every point of every lifting part gets the local loading the
-    // shedding model settled on (stock lift, shared area for clipped stacks, spanwise lifting
-    // line), spreads it along the chord the way an airfoil does, and asks Condensation whether the
-    // air there condenses.
+    // Where the wing vapor forms; no KSP types.
     public static class WingVapor
     {
         // Span strips per part. Samples are on a 12 x 12 grid, and a part is cut into at most four
@@ -49,21 +44,20 @@ namespace VortexVapor
         // Seconds for the vapor to follow a change in loading. Stock's per-part lift jitters
         // step to step with every control twitch; real condensation also takes a moment to form.
         public const float SmoothTime = 0.12f;
+        // and to fade once the loading drops.
+        public const float ReleaseTime = 0.8f;
+        // canard parts (RaymarchVapor.CanardParts) condense at this share of their loading.
+        public static float CanardShare = 1f;
         // How far the in-plane span axis may swing (as a cosine) before the strips are measured
         // again. 0.85 is 32 degrees.
         const float SpanRecheck = 0.85f;
         // Parts whose strips (and buried faces) are measured per step at most, so a change is
         // spread over a few steps instead of one hitch.
-        const int MeasuresPerStep = 1, BuriedPerStep = 2;
-        // A section lifting against the aircraft's net lift is trimming it (a tailplane pushing
-        // down, a canard set against the wing). KSP loads these far harder than real aircraft (no
-        // downwash, CG often well forward), so by default they make no vapor. A deliberate style
-        // rule, not physics: real tailplanes can fog in a hard pull. Surfaces lifting sideways (a
-        // fin) are unaffected.
+        const int MeasuresPerStep = 1;
+        // Surfaces lifting against net lift (trim) make no vapor by default; a style rule.
         public static bool CondenseAgainstLift = false;
         const float AgainstCos = 0.3f;
-        // A section whose suction side faces the craft's belly makes no vapor: none under the
-        // wings, and none in a negative-g push. A style rule like the one above; needs `dorsal`.
+        // Suppress suction faces pointing toward the craft's belly; needs the dorsal direction.
         public static bool CondenseUnderneath = false;
 
         static readonly Dictionary<long, VaporField> fields = new Dictionary<long, VaporField>();
@@ -73,13 +67,7 @@ namespace VortexVapor
         static int[] gammaStart = new int[0], gammaCount = new int[0];
         static float[] gammaOf = new float[0], chordOf = new float[0];
 
-        // The chord a panel's circulation is spread over, for a panel sharing `share` of its
-        // planform.
-        // Stock: the unshared share of the chord, so a clipped stack carries its lift over the one
-        // real chord; the stock onset was tuned with it.
-        // FAR: the panel's full chord, since FAR credits a clipped panel its whole area and flies
-        // the wing at the angle of attack that gives.
-        // Unclipped panels (share 1) read the same either way.
+        // Chord a panel's circulation spreads over: the unshared share (stock) or the full chord (FAR).
         static float SectionChord(float chord, float share, bool far)
         {
             return far ? chord : chord * Mathf.Clamp01(share);
@@ -96,11 +84,14 @@ namespace VortexVapor
         public static float Coverage { get; private set; }
         public static float PeakWater { get; private set; }
 
+        // Condensation table and Prandtl-Glauert factor from the last update.
+        public static float Pg { get; private set; }
+        public static float OnsetSuction { get { return table.OnsetSuction; } }
+        public static float DensityAt(float suction) { return table.Density(suction); }
+
         public static void Clear() { fields.Clear(); Coverage = PeakWater = 0f; }
 
-        // Call right after TrailedVorticity.Compute on the same surfaces.
-        // `bodies` answers which parts contain a point, for the faces buried inside a fuselage or
-        // nacelle; null skips that test.
+        // Call after TrailedVorticity.Compute; `bodies` null skips the buried-face test.
         public static void Compute(List<Surface> surfaces, Vector3 down, float rho, float speed,
             float kelvin, float pascal, float humidity, float mach, float dt, IBodyQuery bodies = null,
             Vector3 dorsal = default(Vector3))
@@ -117,9 +108,11 @@ namespace VortexVapor
                 foreach (var f in fields.Values) { f.cachedSpan = Vector2.zero; f.measured = false; f.buriedMeasured = false; }
             }
             float follow = 1f - Mathf.Exp(-dt / SmoothTime);
+            float release = 1f - Mathf.Exp(-dt / ReleaseTime);
             table.Build(kelvin, pascal, humidity);
             float q = 0.5f * rho * speed * speed;
             float pg = Condensation.PrandtlGlauert(mach);
+            Pg = pg;
             // Stock and FAR are read differently in two places (the suction ceiling, and the chord a
             // section's loading is spread over): see Condensation.PeakCpCap and SectionChord.
             bool far = AeroState.FarAvailable;
@@ -128,7 +121,7 @@ namespace VortexVapor
             Vector3 netLift = Vector3.zero;
             foreach (var sf in surfaces) netLift += sf.lift;
             Vector3 liftDir = netLift.sqrMagnitude > 1e-6f ? netLift.normalized : Vector3.zero;
-            int measures = 0, buriedDone = 0, nSurf = surfaces.Count;
+            int measures = 0, nSurf = surfaces.Count;
 
             if (signature != liftingSignature)
             {
@@ -149,10 +142,7 @@ namespace VortexVapor
             if (gammaOf.Length < totalPanels) { gammaOf = new float[2 * totalPanels]; chordOf = new float[2 * totalPanels]; }
             for (int si = 0; si < surfaces.Count; si++)
             {
-                // The share of this part's loading the vapor sees (Surface.vaporLift): 1 except on
-                // a roll control surface, where it is how much of its load along the net lift its
-                // symmetry group carries together. A part lifting mostly sideways keeps its whole
-                // load.
+                // Share of the part's loading the vapor sees (Surface.vaporLift).
                 float own = Vector3.Dot(surfaces[si].lift, liftDir);
                 float vaporShare = Mathf.Abs(own) > AgainstCos * surfaces[si].lift.magnitude + 1e-3f
                     ? Mathf.Clamp01(Vector3.Dot(surfaces[si].vaporLift, liftDir) / own) : 1f;
@@ -178,7 +168,7 @@ namespace VortexVapor
                 {
                     f = new VaporField
                     {
-                        id = sf.id, density = new float[n], chordFrac = new float[n],
+                        id = sf.id, density = new float[n], suction = new float[n], chordFrac = new float[n],
                         camberShape = new float[n], peakShape = new float[n], sampleSide = new float[n],
                         sectionChord = new float[n], buried = new byte[n], stripOf = new int[n]
                     };
@@ -192,24 +182,17 @@ namespace VortexVapor
                 if (flowing)
                 {
                     Vector2 s2 = fr.InPlane(s.normalized).normalized;
-                    if (Vector2.Dot(s2, f.cachedSpan) < SpanRecheck && measures < MeasuresPerStep)
+                    // Unmeasured parts are measured at once; re-measures wait for the budget.
+                    bool never = f.cachedSpan == Vector2.zero;
+                    if (Vector2.Dot(s2, f.cachedSpan) < SpanRecheck && (never || measures < MeasuresPerStep))
                     {
                         MeasureChord(surfaces, si, s2, down, f);
                         measures++;
                     }
                 }
-                if (!f.buriedMeasured && buriedDone < BuriedPerStep)
-                {
-                    MeasureBuried(sf, bodies, f);
-                    buriedDone++;
-                }
+                if (!f.buriedMeasured) MeasureBuried(sf, bodies, f);
 
-                // The mean pressure difference across the wing section at each strip, Pa: rho V
-                // times the section's bound circulation (summed over every part in the chordwise
-                // row) over the section's chord. Summing keeps a control surface in proportion: an
-                // aileron's own large lift only shifts the whole section's loading by its share. By
-                // Kutta-Joukowski the lift points along +normal where the circulation is positive,
-                // so that side is the suction side.
+                // Section loading per strip: rho V Gamma over chord, summed over the row.
                 if (f.areaSignature != signature)
                 {
                     f.areaSignature = signature;
@@ -219,6 +202,7 @@ namespace VortexVapor
                 }
 
                 bool live = flowing && f.measured && f.buriedMeasured;
+                float share = RaymarchVapor.CanardParts.Contains((uint)sf.id) ? CanardShare : 1f;
                 bool allQuiet = true;
                 // Whether this part lifts against the aircraft's net lift is a property of the
                 // part, not of the sample.
@@ -240,27 +224,20 @@ namespace VortexVapor
                             else leadStall = Mathf.Max(leadStall, surfaces[mi].stall);
                             chord += chordOf[gammaStart[mi] + idx];
                         }
-                        // The section's loading over the members' full panel chords, not the length
-                        // of the flow line through the point. What the parts behind the leading
-                        // edge carry (flaps, ailerons, elevators) is a camber change spread along
-                        // the chord, not an angle of attack feeding the leading-edge peak.
+                        // Loading over the members' full chords; flaps add camber, not a peak.
                         float side = gamma >= 0f ? 1f : -1f;
                         float perGamma = rho * speed / Mathf.Max(chord, 0.1f);
                         float loading = perGamma * gamma * side, flapLoading = perGamma * flapGamma * side;
                         float ct, at;
                         Condensation.StripTerms(loading - flapLoading, flapLoading, q, out ct, out at);
-                        // A stalled section has no leading-edge suction peak, so stall removes the
-                        // angle-of-attack term and leaves the camber term. FAR reports stall per
-                        // part; under stock it is 0, and Condensation.MaxPeakCp stands in.
+                        // Stall removes the alpha term.
                         at *= 1f - leadStall;
                         stripCamberTerm[b] = ct; stripAlphaTerm[b] = at;
                         stripSideOf[b] = side;
                         stripBit[b] = side > 0f ? 1 : 2;   // the face the vapor would be on: a face inside a body has no flow over it
                         stripDead[b] = (!CondenseAgainstLift && partAgainst * side < -AgainstCos)
                                        || (!CondenseUnderneath && partDorsal * side < -AgainstCos);
-                        // Can any sample of the strip condense at all? If the most its shapes allow
-                        // is below the visible onset, the strip is quiet and its samples only fade
-                        // out.
+                        // Skip strips that cannot reach the visible onset.
                         float bound = stripDead[b] ? 0f
                             : Condensation.SuctionFromTerms(Mathf.Max(ct, 0f), at, f.stripCamberMax[b], Condensation.PeakAdjust(f.stripPeakMax[b], pg), q, cpCap);
                         stripQuiet[b] = table.Density(bound) <= 0f;
@@ -280,25 +257,32 @@ namespace VortexVapor
                 {
                     int b = f.stripOf[j];
                     float d = f.density[j];
+                    float sm = f.suction[j];
                     if (live && !stripQuiet[b])
                     {
                         f.sampleSide[j] = stripSideOf[b];
-                        float target = 0f;
+                        float target = 0f, suctionTarget = 0f;
                         if (!stripDead[b] && (f.buried[j] & stripBit[b]) == 0)
                         {
                             float suction = Condensation.SuctionFromTerms(stripCamberTerm[b], stripAlphaTerm[b], f.camberShape[j],
                                                                  Condensation.PeakAdjust(f.peakShape[j], pg), q, cpCap);
                             if (suction > maxSuction) maxSuction = suction;
-                            target = table.Density(suction);
+                            target = table.Density(suction * share);
+                            suctionTarget = suction * share;
                         }
-                        d += (target - d) * follow;
+                        d += (target - d) * (target >= d ? follow : release);
                         f.density[j] = d;
+                        sm += (suctionTarget - sm) * (suctionTarget >= sm ? follow : release);
+                        f.suction[j] = sm;
                     }
-                    else if (d != 0f)
+                    else if (d != 0f || sm != 0f)
                     {
-                        d -= d * follow;
+                        d -= d * release;
                         if (d < 1e-4f) d = 0f;
                         f.density[j] = d;
+                        sm -= sm * release;
+                        if (sm < 1f) sm = 0f;
+                        f.suction[j] = sm;
                     }
                     if (d > 0f)
                     {
@@ -319,11 +303,7 @@ namespace VortexVapor
             PeakWater = peak;
         }
 
-        // The wing section through each span strip: the run of lifting surfaces the flow line
-        // through it crosses, in the same plane (PlanformOverlap's slab) and touching end to end,
-        // so a slat, clipped panels, flap and aileron form one airfoil instead of each putting a
-        // suction peak mid-wing. Each sample takes its place along that chord (0 at the leading
-        // edge) from where it lies along the flow line.
+        // Each strip's section: the touching, coplanar lifting parts along its flow line.
         const float ChordGap = 0.3f;   // m: parts closer than this along the flow are one airfoil
         struct Crossing { public float t0, t1, frac, sign; public int idx; }
         // A member starting within this fraction of the chord from the section's leading edge
@@ -348,9 +328,7 @@ namespace VortexVapor
             f.measured = true;
             float lo, hi;
             pf.SpanRange(s2, out lo, out hi);
-            // Mean chord, but never more than the part's own length along the flow: a part nearly
-            // edge-on to the span (a strake along the fuselage) has a tiny span and area/span
-            // would be many metres.
+            // Mean chord, capped at the part's own length along the flow.
             Vector2 c2 = new Vector2(-s2.y, s2.x);
             float clo, chi;
             pf.SpanRange(c2, out clo, out chi);
@@ -485,10 +463,7 @@ namespace VortexVapor
             }
         }
 
-        // For the log: the parts condensing most, strongest first, as "name water g/kg, loading
-        // Pa, side, with/against" where `side` is the face the vapor is on (the part's +normal
-        // or -normal) and with/against says whether the part lifts with the aircraft's net lift
-        // or against it (a tail in trim pushes down).
+        // For the log: the parts condensing most.
         static readonly List<int> order = new List<int>();
         public static string Report(List<Surface> surfaces, int top)
         {
@@ -518,9 +493,7 @@ namespace VortexVapor
             return sb.ToString();
         }
 
-        // Which faces of each sample lie inside another, non-lifting part. Builders clip wing roots
-        // into fuselages and nacelles; a face inside a solid body has no flow over it, so it cannot
-        // condense. Lifting parts do not count as bodies (PlanformOverlap).
+        // Faces inside a non-lifting part cannot condense.
         static readonly List<long> inside = new List<long>();
         static readonly HashSet<long> liftingIds = new HashSet<long>();
         static long liftingSignature = -1;

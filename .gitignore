@@ -1,20 +1,61 @@
-# Build output. bin/ in particular contains copies of KSP's and Unity's own
-# assemblies (Assembly-CSharp.dll, UnityEngine.*.dll), which are Squad/Unity
-# property and must never be redistributed here.
-bin/
-obj/
+# Public mod files only; everything else stays local.
+/*
+!/.gitignore
+!/README.md
+!/DESCRIPTION.md
+!/CHANGELOG.md
+!/license.md
+!/THIRD-PARTY-NOTICES.md
+!/WingtipVortex.csproj
+!/Plugins/
+/Plugins/*
+!/Plugins/WingtipVortex.dll
+!/Shaders/
+/Shaders/*
+!/Shaders/wingvapor-windows.bundle
+!/Shaders/wingvapor-macos.bundle
+!/Shaders/wingvapor-linux.bundle
+!/Source/
+/Source/*
+!/Source/AssemblyInfo.cs
+!/Source/WingtipVortex.cs
+!/Source/Aeronautic/
+!/Source/AeronauticUnity/
+!/Source/WingVapor/
+/Source/WingVapor/*
+!/Source/WingVapor/AeroState.cs
+!/Source/WingVapor/BDArmoryCraft.cs
+!/Source/WingVapor/Condensation.cs
+!/Source/WingVapor/CraftMeshes.cs
+!/Source/WingVapor/LiftingLine.cs
+!/Source/WingVapor/ModSettings.cs
+!/Source/WingVapor/OtherCraftVapor.cs
+!/Source/WingVapor/Planform.cs
+!/Source/WingVapor/RaymarchVapor.cs
+!/Source/WingVapor/Sunlight.cs
+!/Source/WingVapor/TrailedVorticity.cs
+!/Source/WingVapor/VaporRenderer.cs
+!/Source/WingVapor/VaporShaders.cs
+!/Source/WingVapor/WingVapor.cs
+!/Source/WingVapor/WingVaporAddon.cs
+!/Source/Shaders/
+/Source/Shaders/*
+!/Source/Shaders/AgxTonemap.cginc
+!/Source/Shaders/VaporComposite.shader
+!/Source/Shaders/WingVapor.shader
+!/Source/Shaders/WingVaporField.cginc
+!/docs/
+/docs/*
+!/docs/how-it-works.md
+!/docs/wing-vapor.md
+!/docs/troubleshooting.md
+!/docs/implementation.md
+!/docs/images/
+/docs/images/*
+!/docs/images/banner.jpg
 
-# Visual Studio local state
-.vs/
+*.py
+*.pdb
 *.user
 *.suo
-
-# Local Visual Studio project. The canonical source of record is Source/WingtipVortex.cs;
-# keeping a second copy here under version control only lets the two drift apart. The .csproj
-# also carries machine-specific HintPaths to a local KSP install, so it would not build
-# anywhere else as-is.
-WingtipVertex/
-WingtipVertex.slnx
-
-# Release packages
-dist/
+__pycache__/

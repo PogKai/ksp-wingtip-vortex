@@ -8,10 +8,7 @@ using Debug = UnityEngine.Debug;
 
 namespace VortexVapor
 {
-    // Wing vapor: the white sheet over the wings of an aircraft in a hard pull. A second addon in
-    // the WingtipVortex assembly, sharing only the log tag and the version.
-    // Wires AeroState -> TrailedVorticity (each part's loading) -> WingVapor (condensation at every
-    // point of every wing) -> VaporRenderer (puffs riding the aircraft) every physics step.
+    // Wing vapor addon: AeroState -> TrailedVorticity -> WingVapor -> VaporRenderer each step.
     [KSPAddon(KSPAddon.Startup.Flight, false)]
     public class WingVaporAddon : MonoBehaviour
     {
@@ -27,6 +24,9 @@ namespace VortexVapor
 
         private Vessel vessel;
         private readonly VaporRenderer vaporRenderer = new VaporRenderer();
+        // aeronautic's raymarched vapor, in place of the puffs and the sheet when its shader loaded.
+        private readonly RaymarchVapor raymarch = new RaymarchVapor();
+        private bool raymarchActive = false;
         private Vector3 vaporDown;
         private float nextLogTime = 0f;
         private bool dumped = false;
@@ -38,10 +38,7 @@ namespace VortexVapor
         private double emitWorstMs = 0.0;
         private readonly List<Surface> surfaces = new List<Surface>();
         private readonly VesselBodies bodies = new VesselBodies();
-        // Inputs are refreshed every `stride` physics steps, more rarely the bigger the craft (one
-        // step per PartsPerStride parts, at most MaxStride). The vapor is smoothed over
-        // WingVapor.SmoothTime anyway. The loading and the vapor are computed on different steps of
-        // the stride so neither lands on top of the other.
+        // Inputs refreshed every `stride` steps, more rarely on bigger craft.
         const int PartsPerStride = 60, MaxStride = 4;
         private int step = 0, stride = 1;
         private bool vaporPending = false;
@@ -91,16 +88,16 @@ namespace VortexVapor
             TrailedVorticity.ClearCache();
             WingVapor.Clear();
             vaporRenderer.Clear();
+            raymarch.Clear();
             dumped = false;
             // Start from the vessel's real state, so a craft loaded in orbit does not log a crossing.
             wasInAir = v != null && v.mainBody != null
                        && (float)v.atmDensity / Mathf.Max((float)v.mainBody.atmDensityASL, 1e-4f) >= Condensation.CutoffRatio;
         }
 
-        // Moves the vapor to the active craft, except onto a fired missile (BDArmory makes a
-        // missile the active vessel to follow it). `skippedMissile` is the missile last declined,
-        // so the per-step poll does not re-test it.
+        // Follows the active craft, except onto a fired missile.
         Vessel skippedMissile;
+        double landing;   // smoothed landing-gear contribution
         void Follow(Vessel active)
         {
             if (active == null || active == vessel || active == skippedMissile) return;
@@ -136,15 +133,13 @@ namespace VortexVapor
             Debug.Log($"[VORTEX] wing vapor: error in {where} ({failures}/{MaxFailures}): {e}");
             if (failures < MaxFailures) return;
             disabled = true;
-            try { WingVapor.Clear(); vaporRenderer.Clear(); } catch { }
+            try { WingVapor.Clear(); vaporRenderer.Clear(); raymarch.Clear(); } catch { }
             Debug.Log("[VORTEX] wing vapor: too many errors, switched off for this flight");
         }
 
         void PhysicsStep()
         {
-            // The aircraft the vapor was held on was destroyed while the camera was on a missile;
-            // drop its vapor here. Unity's == null is true for a destroyed object whose reference
-            // is still set.
+            // The held craft was destroyed (Unity == null on a destroyed object).
             if (vessel == null && !ReferenceEquals(vessel, null)) Retarget(null);
             Follow(FlightGlobals.ActiveVessel);
             if (vessel == null || !vessel.loaded) return;
@@ -153,11 +148,14 @@ namespace VortexVapor
             if (vessel.packed)
             {
                 WingVapor.Clear();
+                vaporPending = false;
+                vaporRenderer.Clear();
                 return;
             }
 
-            // Switched off in the settings window: skip the solve; clearing the fields tears the renderer down.
-            if (ModSettings.VaporScale <= 0.01f)
+            // Switched off in the settings window, or drawn by the raymarch (which has its own
+            // field): skip the solve; clearing the fields tears the puffs down.
+            if (ModSettings.VaporScale <= 0.01f || (RaymarchVapor.Available && ModSettings.VaporSheet))
             {
                 if (WingVapor.Fields.Count > 0) WingVapor.Clear();
                 vaporPending = false;
@@ -215,6 +213,9 @@ namespace VortexVapor
             if (vaporPending && (stride == 1 || step % stride == stride / 2))
             {
                 vaporPending = false;
+                raymarch.Prepare(vessel);
+                landing = KspBaseline.EaseLanding(landing, vessel.ActionGroups[KSPActionGroup.Gear], stride * Time.fixedDeltaTime);
+                WingVapor.CanardShare = 1f - (float)KspBaseline.CanardCut(KspBaseline.EquivalentLoad(vessel.geeForce, raymarch.AngleOfAttack(vessel), landing, vessel.srfSpeed));
                 WingVapor.Compute(surfaces, downstream, vaporRho, vaporSpeed,
                     (float)vessel.atmosphericTemperature, (float)(vessel.staticPressurekPa * 1000.0),
                     Humidity(), (float)vessel.mach, stride * Time.fixedDeltaTime, bodies, Dorsal());
@@ -239,6 +240,14 @@ namespace VortexVapor
         void EmitFrame()
         {
             if (vessel == null || !vessel.loaded || vessel.packed) return;
+            if (RaymarchVapor.Available && ModSettings.VaporSheet)
+            {
+                if (!raymarchActive) { vaporRenderer.Clear(); raymarchActive = true; }
+                bool inAir = (float)vessel.atmDensity / Mathf.Max(RhoSeaLevel(), 1e-4f) >= Condensation.CutoffRatio;
+                if (inAir) raymarch.Request(vessel, Daylight(), ModSettings.VaporScale, Mathf.Max(ModSettings.SheetDepth, 0.1f));
+                return;
+            }
+            raymarchActive = false;
             if (WingVapor.Fields.Count == 0) { vaporRenderer.Emit(vessel, vaporDown, 1f, Time.deltaTime); return; }   // tears down an idle system
             long t0 = emitTimer.ElapsedTicks;
             emitTimer.Start();
@@ -318,6 +327,7 @@ namespace VortexVapor
         {
             GameEvents.onVesselChange.Remove(OnVesselChange);
             vaporRenderer.Clear();
+            raymarch.Destroy();
         }
     }
 }

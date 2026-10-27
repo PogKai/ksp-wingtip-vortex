@@ -6,6 +6,10 @@ All notable changes to KSP Wingtip Vortex.
 
 ## 2.0.0 — Raymarched vapor
 
+### Night lighting fix (October 27, 2026)
+
+* Wing vapor now keeps a neutral gray floor at night, matching the vortices' nighttime tone instead of becoming nearly black.
+
 The wing vapor is rebuilt as a raymarched volume, ported from
 [aeronautic](https://github.com/Romainlg29/aeronautic) by Romain Le Gall (MIT) and fitted to KSP.
 

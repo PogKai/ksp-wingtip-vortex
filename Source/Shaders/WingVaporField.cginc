@@ -854,6 +854,8 @@ float4 frag(v2f i) : SV_Target
     // Upstream's light is linear HDR (a sun of 3), graded by AgX and sent out as sRGB; KSP's frame
     // has neither, so both here, on the unpremultiplied colour (exact where the vapor is opaque).
     float3 color = AgxToneMapping(light * _Exposure / coverage);
+    // Keep unlit vapor just above black so its volume survives KSP's darkest night scenes.
+    color = max(color, float3(0.0331048, 0.0331048, 0.0331048));
     if (_GammaOut > 0.5) color = LinearToSrgb(color);
     return float4(color * coverage + _VaporFogColor.rgb * fogged, coverage);
 }

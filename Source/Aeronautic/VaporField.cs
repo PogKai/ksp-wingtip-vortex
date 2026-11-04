@@ -10,6 +10,7 @@ namespace VortexVapor.Aeronautic
     {
         public double Mach, SpeedMPerS, CosAlpha, SinAlpha, FlowZ, RollBias, SlipBias, VortexK, SaturationDeficit;
         public double SemispanM, RootSpanM, TipLeadingM, TipChordM, TipHeightM;
+        public double SideKeep;
         // how far behind the root's trailing edge the sheet thins out over the body.
         public double BodyTrailM;
         // where the sheet starts, and its share over the fuselage.
@@ -849,6 +850,7 @@ namespace VortexVapor.Aeronautic
             f.SaturationDeficit = saturationDeficit;
 
             f.SemispanM = semispan;
+            f.SideKeep = airframe.SideKeep;
             f.RootSpanM = shape.Cover != null ? Math.Max(shape.RootSpanM, shape.Cover.RaisedRootM) : shape.RootSpanM;
             f.InnerSpanM = shape.Cover != null ? Math.Min(shape.InnerSpanM, shape.RootSpanM) : shape.RootSpanM;
             f.BodyCover = Math.Min(Math.Max(flight.BodyCover, 0), 1);

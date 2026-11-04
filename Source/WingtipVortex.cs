@@ -10,7 +10,7 @@ using System.Collections.Generic;
 // whole life.
 public class WingtipVortex : MonoBehaviour
 {
-    public const string ModVersion = "2.0.0";
+    public const string ModVersion = "2.1.0";
 
     // The craft this controller draws. Set by the manager immediately after AddComponent, which
     // is before Start() runs.
@@ -65,15 +65,46 @@ public class WingtipVortex : MonoBehaviour
     // Anchors follow a fixed point in the root part's frame, so joint flex is not drawn into the rope.
     private List<Part> anchorRoots = new List<Part>();
     private List<Vector3> anchorRootOffsets = new List<Vector3>();
+    // The anchor's part and its rotation in the root's frame when the offset was taken: a part that
+    // turns past articulationDeg (a swing wing) re-takes the offset, so the tip follows it.
+    private List<Part> anchorParts = new List<Part>();
+    private List<Quaternion> anchorPartRots = new List<Quaternion>();
+    private const float articulationDeg = 1.5f;
+    // Off only in the dev tools, to show what a swing wing did before the fix.
+    public static bool SwingFix = true;
     private bool rigidAnchors = true;
     private float rigidAnchorMaxFlexSpans = 0.25f;   // beyond this the measurement is not trusted
     private float peakTipFlex = 0f;                  // metres, reported with the session peaks
 
+    // The widest gap between where a vortex is drawn and where its wingtip really is since last read (dev logs).
+    public static float AnchorErrorPeak;
+
     Vector3 AnchorPosition(int i)
+    {
+        Vector3 drawn = AnchorPositionRigid(i);
+        float gap = (drawn - anchors[i].position).magnitude;
+        if (gap > AnchorErrorPeak) AnchorErrorPeak = gap;
+        return drawn;
+    }
+
+    Vector3 AnchorPositionRigid(int i)
     {
         Transform anchor = anchors[i];
         Part root = anchorRoots[i];
         if (!rigidAnchors || root == null || root.vessel != vessel) return anchor.position;
+        Part part = anchorParts[i];
+        if (part != null && SwingFix)
+        {
+            Quaternion rel = Quaternion.Inverse(root.transform.rotation) * part.transform.rotation;
+            float turned = Quaternion.Angle(rel, anchorPartRots[i]);
+            if (turned > articulationDeg)
+            {
+                Log($"anchor {i}: {part.name} turned {turned:F1} deg against the root, offset re-taken");
+                anchorPartRots[i] = rel;
+                anchorRootOffsets[i] = root.transform.InverseTransformPoint(anchor.position);
+                return anchor.position;
+            }
+        }
         Vector3 rigid = root.transform.TransformPoint(anchorRootOffsets[i]);
         float flex = (anchor.position - rigid).magnitude;
         if (flex > rigidAnchorMaxFlexSpans * Mathf.Max(vesselSpan, 1f)) return anchor.position;
@@ -248,13 +279,14 @@ public class WingtipVortex : MonoBehaviour
     private float minSourceArea = 0.3f;            // rejects trim tabs and greebles
     private float minLateralOffset = 0.3f;         // rejects centre sections and vertical fins
     private float secondaryMinSeparation = 0.5f;   // metres a surface must sit clear of the wing
+    const float LostSideShare = 0.45f;   // same share as the vapor's lost-wing test
     private float aftSecondarySpanRatio = 0.8f;    // an aft surface must be this fraction of the
                                                    // main wing's span to count as a second wing
                                                    // rather than a stabiliser
 
     // Maneuver-puff trail lifetime, at least as long as the decay it shows.
     private float maneuverTimeMin = 1.2f;
-    private float maneuverTimeMax = 3.5f;
+    private float maneuverTimeMax = 2.0f;
 
     // Circulation model: strength scales with m/b (mass over span), soft-saturated by 2x/(1+x).
     // Speed is not a term, since the load-factor and onset scaling already carry it.
@@ -638,6 +670,9 @@ public class WingtipVortex : MonoBehaviour
         FindVortexSources();
 
         GameEvents.onFloatingOriginShift.Add(OnFloatingOriginShift);
+        GameEvents.onPartDie.Add(OnStructureChanged);
+        GameEvents.onPartDeCouple.Add(OnStructureChanged);
+        GameEvents.onVesselWasModified.Add(OnVesselModified);
 
         // Confirmation pass: detection runs a second time a few seconds later, while the craft is
         // still on the ground, so a mistimed first pass heals itself.
@@ -660,6 +695,12 @@ public class WingtipVortex : MonoBehaviour
     HashSet<Part> firstMainParts, firstSecParts;
     bool redetectAfterLoss;
 
+    // Aft surfaces seen on an intact craft, by part flightID. A stabiliser or elevator never carries a vortex,
+    // not on a fresh controller after the wing is gone and not on a tail section that broke off.
+    static readonly HashSet<uint> tailParts = new HashSet<uint>();
+    // With no memory yet, surfaces in the aft quarter of the craft are tail unless nothing else is left on that side.
+    const float TailZoneShare = 0.25f;
+
     bool SourcesStale()
     {
         for (int i = 0; i < anchors.Count; i++)
@@ -672,13 +713,47 @@ public class WingtipVortex : MonoBehaviour
         return false;
     }
 
-    void ClearSources()
+    // Wakes of lost anchors keep drawing and fade out; see UpdateFadingWakes.
+    private readonly List<WakeRibbon> fadingWakes = new List<WakeRibbon>();
+    private const float lostWakeFadeTime = 1.5f;   // seconds
+
+    void DestroyRibbon(WakeRibbon rb)
+    {
+        if (rb.mesh != null) Destroy(rb.mesh);
+        if (rb.obj != null) Destroy(rb.obj);
+    }
+
+    void UpdateFadingWakes(float dt)
+    {
+        float now = Time.time;
+        for (int i = fadingWakes.Count - 1; i >= 0; i--)
+        {
+            var rb = fadingWakes[i];
+            rb.fadeT += dt;
+            rb.alphaMul = 1f - Mathf.Clamp01(rb.fadeT / lostWakeFadeTime);
+            while (rb.count > 0 && (now - rb.birth[rb.count - 1]) > rb.lastLife) rb.count--;
+            if (rb.alphaMul <= 0f || rb.count < 2 || rb.obj == null)
+            {
+                DestroyRibbon(rb);
+                fadingWakes.RemoveAt(i);
+                continue;
+            }
+            BuildRibbonMesh(rb, now, rb.lastWidth, rb.lastBlend, rb.lastLife, rb.lastInward);
+        }
+    }
+
+    // Part loss: check the anchors on the next few frames instead of waiting for the timer.
+    private int staleBurst = 0;
+    void OnStructureChanged(Part p) { if (p != null && p.vessel == vessel) staleBurst = 10; }
+    void OnVesselModified(Vessel v) { if (v == vessel) staleBurst = 10; }
+
+    void ClearSources(bool fadeWakes = false)
     {
         for (int i = 0; i < ribbons.Count; i++)
         {
             if (ribbons[i] == null) continue;
-            if (ribbons[i].mesh != null) Destroy(ribbons[i].mesh);
-            if (ribbons[i].obj != null) Destroy(ribbons[i].obj);
+            if (fadeWakes && ribbons[i].count >= 2 && ribbons[i].obj != null) fadingWakes.Add(ribbons[i]);
+            else DestroyRibbon(ribbons[i]);
         }
         for (int i = 0; i < trailObjs.Count; i++)
             if (trailObjs[i] != null) Destroy(trailObjs[i]);
@@ -686,7 +761,7 @@ public class WingtipVortex : MonoBehaviour
             if (anchors[i] != null) Destroy(anchors[i].gameObject);
 
         ribbons.Clear(); trailObjs.Clear(); anchors.Clear();
-        anchorRoots.Clear(); anchorRootOffsets.Clear();
+        anchorRoots.Clear(); anchorRootOffsets.Clear(); anchorParts.Clear(); anchorPartRots.Clear();
         trails.Clear(); lines.Clear();
         strengths.Clear(); spanRatios.Clear();
         lineHistory.Clear();
@@ -699,6 +774,9 @@ public class WingtipVortex : MonoBehaviour
     void OnDestroy()
     {
         GameEvents.onFloatingOriginShift.Remove(OnFloatingOriginShift);
+        GameEvents.onPartDie.Remove(OnStructureChanged);
+        GameEvents.onPartDeCouple.Remove(OnStructureChanged);
+        GameEvents.onVesselWasModified.Remove(OnVesselModified);
 
         // Calibration summary, whether or not either effect ever fired. See peakSwirl.
         if (peakSwirl > 0f || peakGroundFac > 0f)
@@ -711,6 +789,8 @@ public class WingtipVortex : MonoBehaviour
 
         // The vortex objects are unparented to stay in world space, so they need explicit cleanup.
         ClearSources();
+        for (int i = 0; i < fadingWakes.Count; i++) DestroyRibbon(fadingWakes[i]);
+        fadingWakes.Clear();
     }
 
     // FloatingOrigin does not move TrailRenderer vertices; they are shifted here by the full offset.
@@ -746,6 +826,8 @@ public class WingtipVortex : MonoBehaviour
             if (rb == null) continue;
             for (int j = 0; j < rb.count; j++) rb.pts[j] -= worldOffset;
         }
+        for (int i = 0; i < fadingWakes.Count; i++)
+            for (int j = 0; j < fadingWakes[i].count; j++) fadingWakes[i].pts[j] -= worldOffset;
     }
 
     // Projecting a Bounds onto a direction is the sum of absolute per-axis contributions; a dot
@@ -1255,6 +1337,12 @@ public class WingtipVortex : MonoBehaviour
         pool.Sort((a, b) => b.extremity.CompareTo(a.extremity));
         foreach (var c in pool)
             Log($"CANDIDATE part={c.part.name} side={(c.isLeft ? "L" : "R")} ext={c.extremity:F2} z={c.z:F2}{(IsControlPart(c.part) ? " ctrl" : "")}");
+        DropTail(pool);
+        if (pool.Count == 0)
+        {
+            Log("only tail surfaces left — no vortices");
+            return;
+        }
 
         // Main wing: the furthest-reaching surface on each side.
         bool keepOriginal = redetectAfterLoss && firstMainParts != null;
@@ -1262,6 +1350,14 @@ public class WingtipVortex : MonoBehaviour
         if (keepOriginal) Log($"anchor lost — only the original wing's {mainPool.Count} surface(s) may carry a vortex");
         AeroCandidate mainLeft = BestOnSide(mainPool, true, null);
         AeroCandidate mainRight = BestOnSide(mainPool, false, null);
+
+        // A side reaching under LostSideShare of the other's has lost its wing: no vortex from a stub.
+        bool sideLost = false;
+        if (mainLeft != null && mainRight != null)
+        {
+            if (mainRight.extremity < LostSideShare * mainLeft.extremity) { Log($"one wing is gone — right side bare (reach {mainRight.extremity:F1}/{mainLeft.extremity:F1} m)"); mainRight = null; sideLost = true; }
+            else if (mainLeft.extremity < LostSideShare * mainRight.extremity) { Log($"one wing is gone — left side bare (reach {mainLeft.extremity:F1}/{mainRight.extremity:F1} m)"); mainLeft = null; sideLost = true; }
+        }
 
         // Assembly: everything physically continuous with those winners.
         HashSet<Part> mainAssembly = BuildAssembly(pool, mainLeft, mainRight);
@@ -1297,6 +1393,10 @@ public class WingtipVortex : MonoBehaviour
             }
         }
 
+        // Aft surfaces that are not a wing: remembered as tail for good.
+        foreach (var c in aftSec)
+            if (!mainAssembly.Contains(c.part) && tailParts.Add(c.part.flightID)) Log($"tail surface remembered: {c.part.name}");
+
         // Both sides take their secondary from the same station.
         List<AeroCandidate> station = null;
         string stationName = null;
@@ -1309,6 +1409,7 @@ public class WingtipVortex : MonoBehaviour
         {
             station = aftSec;
             stationName = "AFT (tandem-scale)";
+            foreach (var c in aftSec) tailParts.Remove(c.part.flightID);
         }
         else if (aftSec.Count > 0)
         {
@@ -1336,9 +1437,9 @@ public class WingtipVortex : MonoBehaviour
 
         // Symmetry fallback: mirror the surviving side's tip across the centreline.
         // (not after a loss: a broken wing leaves its side bare)
-        if (!keepOriginal && !okML && okMR && mainRight != null)
+        if (!keepOriginal && !sideLost && !okML && okMR && mainRight != null)
             AddWingVortex(mainRight.part, false, 1f, true, mainAssembly);
-        if (!keepOriginal && !okMR && okML && mainLeft != null)
+        if (!keepOriginal && !sideLost && !okMR && okML && mainLeft != null)
             AddWingVortex(mainLeft.part, true, 1f, true, mainAssembly);
         if (!keepOriginal) { firstMainParts = mainAssembly; firstSecParts = secAssembly; }
 
@@ -1472,6 +1573,34 @@ public class WingtipVortex : MonoBehaviour
 
     // One gatherer, two gates. radialGate=false is the lateral-offset behaviour; radialGate=true is
     // roll-invariant and a superset (a fin at lat=0 is kept by it).
+    // Takes the remembered tail surfaces out of the pool, then (nose known) those in the craft's aft quarter that
+    // have a wing-side candidate ahead of them on the same side.
+    void DropTail(List<AeroCandidate> pool)
+    {
+        int before = pool.Count;
+        var excludedNames = new List<string>();
+        foreach (var c in pool) if (tailParts.Contains(c.part.flightID)) excludedNames.Add(c.part.name);
+        pool.RemoveAll(c => tailParts.Contains(c.part.flightID));
+        if (axLengthSigned && pool.Count > 0)
+        {
+            float lo = float.MaxValue, hi = float.MinValue;
+            foreach (Part p in vessel.parts)
+            {
+                if (p == null) continue;
+                float z = Vector3.Dot(p.transform.position - vesselTransform.position, axLength);
+                if (z < lo) lo = z;
+                if (z > hi) hi = z;
+            }
+            float cut = lo + TailZoneShare * (hi - lo);
+            bool aheadL = pool.Exists(c => c.isLeft && c.z >= cut), aheadR = pool.Exists(c => !c.isLeft && c.z >= cut);
+            var tail = pool.FindAll(c => c.z < cut && (c.isLeft ? aheadL : aheadR));
+            foreach (var c in tail) { tailParts.Add(c.part.flightID); excludedNames.Add(c.part.name + "@" + c.z.ToString("F1")); }
+            pool.RemoveAll(c => tail.Contains(c));
+        }
+        if (pool.Count < before) Log($"tail surfaces excluded: {before - pool.Count} of {before} candidate(s)");
+        if (pool.Count < before && excludedNames.Count > 0) Log("  tail: " + string.Join(", ", excludedNames.ToArray()));
+    }
+
     List<AeroCandidate> GatherCandidates(bool radialGate)
     {
         List<AeroCandidate> pool = new List<AeroCandidate>();
@@ -1780,6 +1909,10 @@ public class WingtipVortex : MonoBehaviour
         Part rootPart = vessel != null ? vessel.rootPart : null;
         anchorRoots.Add(rootPart);
         anchorRootOffsets.Add(rootPart != null ? rootPart.transform.InverseTransformPoint(anchor.position) : Vector3.zero);
+        Part anchorPart = anchor.GetComponentInParent<Part>();
+        anchorParts.Add(anchorPart);
+        anchorPartRots.Add(rootPart != null && anchorPart != null
+            ? Quaternion.Inverse(rootPart.transform.rotation) * anchorPart.transform.rotation : Quaternion.identity);
         lineHistory.Add(new Queue<Vector3>());
         trailWasActive.Add(false); lineWasActive.Add(false);
         lastFlows.Add(Vector3.zero); lastAnchorPositions.Add(anchor.position);
@@ -1831,6 +1964,11 @@ public class WingtipVortex : MonoBehaviour
         public float seed;   // so the two wingtips never band identically
 
         public int count;
+
+        // Last build parameters and fade state, for a wake kept alive after its anchor is lost.
+        public float lastWidth, lastBlend, lastLife, lastInward;
+        public float fadeT;
+        public float alphaMul = 1f;
 
         // Reused mesh buffers.
         public Vector3[] verts;
@@ -2224,7 +2362,7 @@ public class WingtipVortex : MonoBehaviour
 
                 int vi = i * K + k;
                 r.verts[vi] = w;
-                r.cols[vi] = new Color(1f, 1f, 1f, alpha * stripe);
+                r.cols[vi] = new Color(1f, 1f, 1f, alpha * stripe * r.alphaMul);
                 r.uvs[vi] = new Vector2((float)k / K, uy);
                 lo = Vector3.Min(lo, w); hi = Vector3.Max(hi, w);
             }
@@ -2483,15 +2621,18 @@ public class WingtipVortex : MonoBehaviour
             boundsRefreshTimer = 0f;
         }
 
-        // See staleCheckTimer. Rebuilding discards the wake of the parts that just left.
+        UpdateFadingWakes(dt);
+
+        // See staleCheckTimer. The wake of the parts that just left fades out (UpdateFadingWakes).
         staleCheckTimer += dt;
+        if (staleBurst > 0) { staleBurst--; staleCheckTimer = staleCheckInterval; }
         if (staleCheckTimer >= staleCheckInterval)
         {
             staleCheckTimer = 0f;
             if (trails.Count > 0 && SourcesStale())
             {
                 Log("sources no longer belong to this vessel — re-detecting");
-                ClearSources();
+                ClearSources(true);
                 ComputeVesselBounds();
                 redetectAfterLoss = true;
                 try { FindVortexSources(); } finally { redetectAfterLoss = false; }
@@ -3061,8 +3202,9 @@ public class WingtipVortex : MonoBehaviour
                     }
                 }
 
-                BuildRibbonMesh(rb, now, rScale * Mathf.Lerp(1f, contrailWidthScale, contrailBlend), contrailBlend, life,
-                                Mathf.Clamp01(strengths[i]));
+                rb.lastWidth = rScale * Mathf.Lerp(1f, contrailWidthScale, contrailBlend);
+                rb.lastBlend = contrailBlend; rb.lastLife = life; rb.lastInward = Mathf.Clamp01(strengths[i]);
+                BuildRibbonMesh(rb, now, rb.lastWidth, rb.lastBlend, rb.lastLife, rb.lastInward);
             }
 
             // Width and colour apply while the trail ages out, even after emission stops (see
@@ -3397,6 +3539,7 @@ public class WingtipVortexManager : MonoBehaviour
             case VesselType.DroppedPart:
                 return false;
         }
+        if (VortexVapor.RaymarchVapor.BrokenOff(v)) return false;
         for (int i = 0; i < v.parts.Count; i++)
         {
             Part p = v.parts[i];

@@ -42,7 +42,7 @@ namespace VortexVapor
             near.Clear();
             foreach (Vessel v in FlightGlobals.VesselsLoaded)
             {
-                if (v == null || v == FlightGlobals.ActiveVessel || v.packed || v.LandedOrSplashed || v.srfSpeed < 30 || BDArmoryCraft.IsMissile(v)) continue;
+                if (v == null || v == FlightGlobals.ActiveVessel || v.packed || v.LandedOrSplashed || v.srfSpeed < 30 || BDArmoryCraft.IsMissile(v) || RaymarchVapor.BrokenOff(v)) continue;
                 if (v.mainBody == null || (float)v.atmDensity / Mathf.Max((float)v.mainBody.atmDensityASL, 1e-4f) < Condensation.CutoffRatio) continue;
                 float d = (v.CoM - camera).magnitude;
                 if (d > MaxDistanceM || !Lifts(v)) continue;

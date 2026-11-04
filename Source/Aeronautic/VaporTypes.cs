@@ -7,6 +7,8 @@ namespace VortexVapor.Aeronautic
     public class VaporAirframe
     {
         public double SpanM, RootChordM, TipChordM, LeadingEdgeSweepRad, ApexM, WingHeightM, DihedralRad, Thickness, RootSpanM;
+        // 0: a wing each side. +1 or -1: only that side (its sign in z) still has its wing, the other is gone (not upstream).
+        public double SideKeep;
         public double NoseM, FuselageLengthM, FuselageRadiusM, FuselageHeightM;
         public double MassKg, LeadingEdgeSharpness;
         public double TipCoreRadius, TipCoreShare, LeadingEdgeCoreRadius;

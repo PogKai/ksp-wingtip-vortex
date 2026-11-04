@@ -16,6 +16,7 @@ namespace VortexVapor
         VaporDriver driver;
         Vessel vessel;
         int partCount = -1;
+        uint partSignature;
         bool built;
         bool measuredGrounded;
         bool groundFrameFlipped;
@@ -54,7 +55,8 @@ namespace VortexVapor
         public void Prepare(Vessel v)
         {
             if (!Available || v == null || v.rootPart == null) return;
-            if (v != vessel || v.parts.Count != partCount) Rebuild(v);
+            if (v != vessel || v.parts.Count != partCount || PartSignature(v) != partSignature) Rebuild(v);
+            else if (built && PoseMoved()) Remeasure(v);
             else if (measuredGrounded && !v.LandedOrSplashed && v.srfSpeed >= 30)
             {
                 if (groundFrameFlipped) Rebuild(v);
@@ -66,10 +68,102 @@ namespace VortexVapor
             }
         }
 
+        // The part set by flight ID: a part swapped for another (undock, dock) keeps the count.
+        static uint PartSignature(Vessel v)
+        {
+            uint sum = 0;
+            for (int i = 0; i < v.parts.Count; i++) sum += v.parts[i].flightID * 2654435761u;
+            return sum;
+        }
+
+        // The wing outlines sit further from the measured pose than the flex fit explains
+        // (a swing wing, a broken joint) for PoseHoldS; PoseMinGapS apart at most.
+        const float PoseDriftM = 0.3f, PoseHoldS = 0.25f, PoseMinGapS = 0.5f;
+        // Off only in the dev tools, to show what a swing wing did before the fix.
+        public static bool SwingFix = true;
+        // How far the wing outlines sit from the measured pose now (dev logs).
+        public static float PoseDriftNow;
+        float poseResidual, poseDriftSince = -1f, lastMeasureTime = -10f;
+
+        bool PoseMoved()
+        {
+            PoseDriftNow = poseResidual;
+            if (!SwingFix || poseResidual < PoseDriftM) { poseDriftSince = -1f; return false; }
+            float now = Time.time;
+            if (poseDriftSince < 0f) poseDriftSince = now;
+            return now - poseDriftSince >= PoseHoldS && now - lastMeasureTime >= PoseMinGapS;
+        }
+
+        // Measure again in place: the history and the load filters stay.
+        // Where a measurement's time went (verbose log): outlines, body, airframe, cover mesh, finish.
+        readonly double[] stageMs = new double[5];
+        static double Lap(System.Diagnostics.Stopwatch w) { double ms = w.Elapsed.TotalMilliseconds; w.Restart(); return ms; }
+
+        static string lastSideReach = "";
+        double loggedSideKeep;
+
+        // One side's lifting outlines reach under this share of the other's: its wing is gone.
+        const float LostSideShare = 0.45f;
+
+        // 0 with a wing each side, else the sign (in z) of the side that still has one.
+        // The tail is left out: outlines centred in the craft's aft quarter (x runs nose to tail) are stabilisers, not the wing.
+        static double LostSide(List<SurfacePolygon> surfaces, double noseX, double tailX)
+        {
+            double plus = 0, minus = 0, aftFrom = noseX + 0.75 * (tailX - noseX);
+            foreach (SurfacePolygon s in surfaces)
+            {
+                double centre = 0;
+                for (int i = 0; i < s.X.Length; i++) centre += s.X[i] / s.X.Length;
+                if (centre > aftFrom) continue;
+                for (int i = 0; i < s.Z.Length; i++) { plus = Math.Max(plus, s.Z[i]); minus = Math.Max(minus, -s.Z[i]); }
+            }
+            lastSideReach = plus.ToString("F1") + "/" + minus.ToString("F1");
+            if (minus < LostSideShare * plus) return 1;
+            if (plus < LostSideShare * minus) return -1;
+            return 0;
+        }
+
+        // True while Measure runs from Remeasure (the dev recorder keeps only the first measurement).
+        bool remeasuring;
+
+        void Remeasure(Vessel v)
+        {
+            float moved = poseResidual;
+            var timing = System.Diagnostics.Stopwatch.StartNew();
+            remeasuring = true;
+            try { built = Measure(v); }
+            catch (Exception e) { built = false; Debug.Log("[VORTEX] wing vapor: raymarch remeasure failed: " + e.Message); }
+            finally { remeasuring = false; }
+            if (WingVaporAddon.Verbose)
+                Debug.Log($"[VORTEX] wing vapor: wings moved {moved:F2} m off the measured pose, airframe again in {timing.Elapsed.TotalMilliseconds:F1} ms (outlines {stageMs[0]:F0}, body {stageMs[1]:F0}, airframe {stageMs[2]:F0}, cover {stageMs[3]:F0}, finish {stageMs[4]:F0}) for {v.vesselName}");
+        }
+
+        // A piece torn off a craft: debris, or a chunk with nothing to fly it (no command part).
+        // Off only in the dev tools, to show what a torn-off piece drew before.
+        public static bool HideBrokenOff = true;
+
+        public static bool BrokenOff(Vessel v)
+        {
+            if (!HideBrokenOff) return false;
+            switch (v.vesselType)
+            {
+                case VesselType.Debris:
+                case VesselType.DroppedPart:
+                case VesselType.EVA:
+                case VesselType.Flag:
+                case VesselType.SpaceObject:
+                case VesselType.Unknown:
+                    return true;
+            }
+            for (int i = 0; i < v.parts.Count; i++)
+                if (v.parts[i] != null && v.parts[i].Modules.Contains("ModuleCommand")) return false;
+            return true;
+        }
+
         public void Request(Vessel v, float daylight, float opacity, float reachScale)
         {
             Drawing = false;
-            if (!Available || v == null || v.rootPart == null) return;
+            if (!Available || v == null || v.rootPart == null || BrokenOff(v)) return;
             Prepare(v);
             if (!built) return;
             this.daylight = daylight;
@@ -201,6 +295,7 @@ namespace VortexVapor
                 }
             }
             if (!Solve(flexNormal, flexRight, flexFit)) return;
+            poseResidual = FlexResidual(toCanonical, origin, centre);
             Vector3 turn = new Vector3((float)flexFit[3], (float)flexFit[4], (float)flexFit[5]);
             // The turn is about the points' centre; as a turn about the frame's origin, the shift absorbs it.
             Vector3 shift = new Vector3((float)flexFit[0], (float)flexFit[1], (float)flexFit[2]) - Vector3.Cross(turn, centre);
@@ -212,6 +307,25 @@ namespace VortexVapor
             wingFlex = Vector2.Lerp(wingFlex, bend, ease);
             flexShift = Vector3.Lerp(flexShift, shift, ease);
             flexTurn = Vector3.Lerp(flexTurn, turn, ease);
+        }
+
+        // The largest distance a measured point sits from where the fitted shift, turn and bend put it.
+        float FlexResidual(Quaternion toCanonical, Vector3 origin, Vector3 centre)
+        {
+            WingShape shape = driver.Shape;
+            Vector3 turn = new Vector3((float)flexFit[3], (float)flexFit[4], (float)flexFit[5]);
+            Vector3 shift = new Vector3((float)flexFit[0], (float)flexFit[1], (float)flexFit[2]);
+            float worst = 0f;
+            for (int i = 0; i < flexParts.Count; i++)
+            {
+                if (flexParts[i] == null) continue;
+                Vector3 rest = flexRest[i], r = rest - centre;
+                Vector3 moved = toCanonical * (flexParts[i].transform.TransformPoint(flexLocal[i]) - origin) - rest;
+                double span = Math.Max(Math.Abs(rest.z) - shape.RootSpanM, 0);
+                Vector3 predicted = shift + Vector3.Cross(turn, r) + new Vector3(0f, (float)((flexFit[6] + flexFit[7] * span) * span), 0f);
+                worst = Mathf.Max(worst, (moved - predicted).magnitude);
+            }
+            return worst;
         }
 
         // Gaussian elimination with partial pivoting; false when singular.
@@ -281,6 +395,7 @@ namespace VortexVapor
             Vector3 box = driver.BoxMax - driver.BoxMin;
             Debug.Log($"[VORTEX] wing vapor: raymarch: {driver.Speed:F0} m/s alpha {driver.Alpha * 180 / Math.PI:F1} lift {driver.LoadG:F1} g (field {KspBaseline.FieldLoad(driver.EffectiveLoad):F1} g at {driver.Flight.AngleOfAttackRad * 180 / Math.PI:F1} deg) "
                       + $"beta {driver.Beta * 180 / Math.PI:F1} roll {driver.RollRate:F2} rad/s, alt {driver.Altitude:F0} m, "
+                      + $"pose drift {poseResidual:F2} m, "
                       + $"bounds wing {f.WingBoundM:F2} edge {f.EdgeBoundM:F2} cone {f.ConeBoundM:F2} m, box {box}, step x{driver.StepScale:F2} detail {driver.Detail}, steps {driver.MaxSteps}");
         }
 
@@ -290,6 +405,7 @@ namespace VortexVapor
             var timing = System.Diagnostics.Stopwatch.StartNew();
             vessel = v;
             partCount = v.parts.Count;
+            partSignature = PartSignature(v);
             built = false;
             if (driver == null) driver = new VaporDriver(VaporShaders.Raymarch);
             driver.Reset();
@@ -335,8 +451,10 @@ namespace VortexVapor
             Vector3 upWorld = rotation * Vector3.up;
 
             flexParts.Clear(); flexLocal.Clear(); flexRest.Clear();
+            poseResidual = 0f; poseDriftSince = -1f; lastMeasureTime = Time.time;
             wingFlex = Vector2.zero;
             flexShift = flexTurn = Vector3.zero;
+            var lap = System.Diagnostics.Stopwatch.StartNew();
             var surfaces = new List<SurfacePolygon>();
             var owners = new List<Part>();
             var lifting = new HashSet<Part>();
@@ -364,6 +482,7 @@ namespace VortexVapor
                 owners.Add(s.part);
             }
             int flags = AddWingFlags(v, lifting, surfaces, toCanonical, origin);
+            stageMs[0] = Lap(lap);
 
             // The body: the craft's extent along x for the cone, and the widest part near the
             // centreline that does not lift for its radius.
@@ -393,6 +512,7 @@ namespace VortexVapor
             }
             if (double.IsInfinity(noseX)) return false;
             if (heightWeight > 0) height /= heightWeight;
+            stageMs[1] = Lap(lap);
 
             VaporAirframe airframe;
             WingShape shape;
@@ -401,7 +521,17 @@ namespace VortexVapor
                 Debug.Log($"[VORTEX] wing vapor: raymarch: no wing found on {v.vesselName} ({surfaces.Count} lifting outlines)");
                 return false;
             }
+            stageMs[2] = Lap(lap);
+            airframe.SideKeep = LostSide(surfaces, noseX, tailX);
+            // Logged on the first measurement and when the answer changes, not on every re-measure.
+            if (!remeasuring || airframe.SideKeep != loggedSideKeep)
+            {
+                loggedSideKeep = airframe.SideKeep;
+                if (airframe.SideKeep != 0) Debug.Log($"[VORTEX] wing vapor: one wing is gone on {v.vesselName}, vapor kept on the {(airframe.SideKeep > 0 ? "+" : "-")} side only (reach {lastSideReach} m)");
+                else Debug.Log($"[VORTEX] wing vapor: side reach {lastSideReach} m on {v.vesselName}");
+            }
             shape.Cover = WingCover.Build(Triangles(v, toCanonical, origin), surfaces, airframe.RootSpanM);
+            stageMs[3] = Lap(lap);
             if (Primary) CanardParts.Clear();
             if (Primary && shape.Canard != null)
                 for (int i = 0; i < owners.Count; i++)
@@ -410,6 +540,7 @@ namespace VortexVapor
             if (shape.Cover != null) shape.Cover.BuildBody(shape);
             KspBaseline.Prepare(shape);
             driver.SetAirframe(airframe, shape);
+            stageMs[4] = Lap(lap);
             Debug.Log($"[VORTEX] wing vapor: raymarch airframe for {v.vesselName}: span {airframe.SpanM:F1} m, root chord {airframe.RootChordM:F1} m, "
                       + $"tip chord {airframe.TipChordM:F1} m, sweep {airframe.LeadingEdgeSweepRad * 180 / Math.PI:F0} deg, root at {airframe.RootSpanM:F2} m, "
                       + $"secondary {(shape.Secondary == null ? "none" : (shape.Secondary.IsCanard ? "canard" : "tail") + $" {shape.Secondary.SemispanM * 2:F1} m")}, "

@@ -56,7 +56,7 @@ namespace VortexVapor.Aeronautic
         static readonly int VortexKId = Shader.PropertyToID("_VortexK");
         static readonly int SaturationDeficitId = Shader.PropertyToID("_SaturationDeficit");
         static readonly int SemispanMId = Shader.PropertyToID("_SemispanM");
-        static readonly int RootSpanMId = Shader.PropertyToID("_RootSpanM");
+        static readonly int RootSpanMId = Shader.PropertyToID("_RootSpanM"), SideKeepId = Shader.PropertyToID("_SideKeep");
         static readonly int SectionLiftMId = Shader.PropertyToID("_SectionLiftM");
         static readonly int ReachChordMId = Shader.PropertyToID("_ReachChordM");
         static readonly int SeparationId = Shader.PropertyToID("_Separation");
@@ -249,6 +249,7 @@ namespace VortexVapor.Aeronautic
             Material.SetFloat(SaturationDeficitId, (float)f.SaturationDeficit);
             Material.SetFloat(SemispanMId, (float)f.SemispanM);
             Material.SetFloat(RootSpanMId, (float)f.RootSpanM);
+            Material.SetFloat(SideKeepId, (float)f.SideKeep);
             Material.SetFloat(InnerSpanMId, (float)f.InnerSpanM);
             Material.SetFloat(BodyCoverId, (float)f.BodyCover);
             Material.SetFloat(BodyDeficitId, (float)f.BodyDeficitAtSurface);

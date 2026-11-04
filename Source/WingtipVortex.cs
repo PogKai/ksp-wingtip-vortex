@@ -280,6 +280,8 @@ public class WingtipVortex : MonoBehaviour
     private float minLateralOffset = 0.3f;         // rejects centre sections and vertical fins
     private float secondaryMinSeparation = 0.5f;   // metres a surface must sit clear of the wing
     const float LostSideShare = 0.45f;   // same share as the vapor's lost-wing test
+    const float StumpShare = 0.85f;      // after a loss, also this share of the reach ratio the craft first had
+    float firstReachRatio = -1;
     private float aftSecondarySpanRatio = 0.8f;    // an aft surface must be this fraction of the
                                                    // main wing's span to count as a second wing
                                                    // rather than a stabiliser
@@ -1355,8 +1357,16 @@ public class WingtipVortex : MonoBehaviour
         bool sideLost = false;
         if (mainLeft != null && mainRight != null)
         {
-            if (mainRight.extremity < LostSideShare * mainLeft.extremity) { Log($"one wing is gone — right side bare (reach {mainRight.extremity:F1}/{mainLeft.extremity:F1} m)"); mainRight = null; sideLost = true; }
-            else if (mainLeft.extremity < LostSideShare * mainRight.extremity) { Log($"one wing is gone — left side bare (reach {mainLeft.extremity:F1}/{mainRight.extremity:F1} m)"); mainLeft = null; sideLost = true; }
+            float hiReach = Mathf.Max(mainLeft.extremity, mainRight.extremity);
+            float ratio = hiReach > 0f ? Mathf.Min(mainLeft.extremity, mainRight.extremity) / hiReach : 1f;
+            if (!keepOriginal) firstReachRatio = ratio;
+            if (ratio < LostSideShare || (keepOriginal && firstReachRatio > 0f && ratio < StumpShare * firstReachRatio))
+            {
+                bool rightShort = mainRight.extremity < mainLeft.extremity;
+                Log($"one wing is gone — {(rightShort ? "right" : "left")} side bare (reach {Mathf.Min(mainLeft.extremity, mainRight.extremity):F1}/{hiReach:F1} m)");
+                if (rightShort) mainRight = null; else mainLeft = null;
+                sideLost = true;
+            }
         }
 
         // Assembly: everything physically continuous with those winners.

@@ -104,10 +104,14 @@ namespace VortexVapor
 
         // One side's lifting outlines reach under this share of the other's: its wing is gone.
         const float LostSideShare = 0.45f;
+        // After a loss the short side must also keep this share of the reach ratio the craft first had, so a stump is not a wing.
+        const float StumpShare = 0.85f;
+        Vessel ratioVessel;
+        double firstRatio = -1, pendingSide = double.NaN;
 
         // 0 with a wing each side, else the sign (in z) of the side that still has one.
         // The tail is left out: outlines centred in the craft's aft quarter (x runs nose to tail) are stabilisers, not the wing.
-        static double LostSide(List<SurfacePolygon> surfaces, double noseX, double tailX)
+        double LostSide(List<SurfacePolygon> surfaces, double noseX, double tailX)
         {
             double plus = 0, minus = 0, aftFrom = noseX + 0.75 * (tailX - noseX);
             foreach (SurfacePolygon s in surfaces)
@@ -118,9 +122,10 @@ namespace VortexVapor
                 for (int i = 0; i < s.Z.Length; i++) { plus = Math.Max(plus, s.Z[i]); minus = Math.Max(minus, -s.Z[i]); }
             }
             lastSideReach = plus.ToString("F1") + "/" + minus.ToString("F1");
-            if (minus < LostSideShare * plus) return 1;
-            if (plus < LostSideShare * minus) return -1;
-            return 0;
+            double hi = Math.Max(plus, minus), ratio = hi > 0 ? Math.Min(plus, minus) / hi : 1;
+            if (firstRatio < 0) firstRatio = ratio;
+            if (ratio >= LostSideShare && ratio >= StumpShare * firstRatio) return 0;
+            return minus < plus ? 1 : -1;
         }
 
         // True while Measure runs from Remeasure (the dev recorder keeps only the first measurement).
@@ -522,7 +527,15 @@ namespace VortexVapor
                 return false;
             }
             stageMs[2] = Lap(lap);
-            airframe.SideKeep = LostSide(surfaces, noseX, tailX);
+            if (ratioVessel != v) { ratioVessel = v; firstRatio = -1; }
+            double side = LostSide(surfaces, noseX, tailX);
+            // A pose re-measure must read a change twice before it flips the side: one reading mid-sweep can be off.
+            if (remeasuring && side != loggedSideKeep)
+            {
+                if (side != pendingSide) { pendingSide = side; side = loggedSideKeep; }
+            }
+            else pendingSide = double.NaN;
+            airframe.SideKeep = side;
             // Logged on the first measurement and when the answer changes, not on every re-measure.
             if (!remeasuring || airframe.SideKeep != loggedSideKeep)
             {

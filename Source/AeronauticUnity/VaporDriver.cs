@@ -111,6 +111,13 @@ namespace VortexVapor
             Visible = false;
         }
 
+        // The same craft's shape moved on a little: drawn from the next frame, nothing else reset.
+        public void SetShape(WingShape s)
+        {
+            shape = s;
+            shapeWritten = false;
+        }
+
         // Forget what the last frames measured: a new craft, or a jump.
         public void Reset()
         {

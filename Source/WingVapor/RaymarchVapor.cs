@@ -56,6 +56,10 @@ namespace VortexVapor
         {
             if (!Available || v == null || v.rootPart == null) return;
             if (v != vessel || v.parts.Count != partCount || PartSignature(v) != partSignature) Rebuild(v);
+            else if (pending != null)
+            {
+                if (pending.Task.IsCompleted) FinishPending();
+            }
             else if (built && PoseMoved()) Remeasure(v);
             else if (measuredGrounded && !v.LandedOrSplashed && v.srfSpeed >= 30)
             {
@@ -76,22 +80,25 @@ namespace VortexVapor
             return sum;
         }
 
-        // The wing outlines sit further from the measured pose than the flex fit explains
-        // (a swing wing, a broken joint) for PoseHoldS; PoseMinGapS apart at most.
-        const float PoseDriftM = 0.3f, PoseHoldS = 0.25f, PoseMinGapS = 0.5f;
+        // The wing outlines sit further from the measured pose than the flex fit explains (a swing wing,
+        // a broken joint): a first re-measure at PoseDriftM held PoseHoldS, then back to back at the finer
+        // PoseFollowM while the wings keep moving (until PoseFollowS after the last one lands).
+        const float PoseDriftM = 0.1f, PoseHoldS = 0.05f, PoseFollowM = 0.03f, PoseFollowS = 0.4f;
         // Off only in the dev tools, to show what a swing wing did before the fix.
         public static bool SwingFix = true;
         // How far the wing outlines sit from the measured pose now (dev logs).
         public static float PoseDriftNow;
-        float poseResidual, poseDriftSince = -1f, lastMeasureTime = -10f;
+        float poseResidual, poseDriftSince = -1f, lastMeasureTime = -10f, lastApplyTime = -10f;
 
         bool PoseMoved()
         {
             PoseDriftNow = poseResidual;
-            if (!SwingFix || poseResidual < PoseDriftM) { poseDriftSince = -1f; return false; }
             float now = Time.time;
+            if (!SwingFix) { poseDriftSince = -1f; return false; }
+            if (now - lastApplyTime < PoseFollowS && poseResidual >= PoseFollowM) return true;
+            if (poseResidual < PoseDriftM) { poseDriftSince = -1f; return false; }
             if (poseDriftSince < 0f) poseDriftSince = now;
-            return now - poseDriftSince >= PoseHoldS && now - lastMeasureTime >= PoseMinGapS;
+            return now - poseDriftSince >= PoseHoldS;
         }
 
         // Measure again in place: the history and the load filters stay.
@@ -131,16 +138,94 @@ namespace VortexVapor
         // True while Measure runs from Remeasure (the dev recorder keeps only the first measurement).
         bool remeasuring;
 
+        // The main thread reads the wings and hands the build to a worker; the old airframe keeps drawing until it lands.
         void Remeasure(Vessel v)
         {
-            float moved = poseResidual;
+            pendingMoved = poseResidual;
+            pendingStart = Time.time;
+            remeasuring = true;
+            try { Measure(v, true); }
+            catch (Exception e) { pending = null; Debug.Log("[VORTEX] wing vapor: raymarch remeasure failed: " + e.Message); }
+            finally { remeasuring = false; }
+        }
+
+        float pendingMoved, pendingStart;
+
+        // The measured shape is a few frames old: each frame it is moved on by the last two measurements' difference.
+        // When a new measurement lands, the jump between what was drawn and what is now drawn is eased out (CarryBlendS).
+        const float CarryMaxS = 0.25f, CarryMaxM = 0.6f, CarryMinM = 0.004f, CarryBlendS = 0.06f;
+        WingShape lastShape, prevShape;
+        float lastShapeAt, prevShapeAt;
+        bool carried, newMeasure;
+        float[] shownL, shownC, shownM, offL, offC, offM;
+        bool haveOffset;
+
+        void CarryShape()
+        {
+            if (lastShape == null || prevShape == null || !SwingFix) return;
+            float gap = lastShapeAt - prevShapeAt;
+            float k = gap > 0.02f ? Mathf.Min(Time.time - lastShapeAt, CarryMaxS) / gap : 0f;
+            int n = WingShape.Stations;
+            var lead = new float[n]; var chord = new float[n]; var mid = new float[n];
+            for (int i = 0; i < n; i++)
+            {
+                float l = lastShape.LeadingM[i], t = l + lastShape.ChordM[i], m = lastShape.MidM[i];
+                float dl = Mathf.Clamp((l - prevShape.LeadingM[i]) * k, -CarryMaxM, CarryMaxM);
+                float dt = Mathf.Clamp((t - prevShape.LeadingM[i] - prevShape.ChordM[i]) * k, -CarryMaxM, CarryMaxM);
+                float dm = Mathf.Clamp((m - prevShape.MidM[i]) * k, -CarryMaxM, CarryMaxM);
+                lead[i] = l + dl; chord[i] = Mathf.Max(t + dt - lead[i], 0.05f); mid[i] = m + dm;
+            }
+            if (newMeasure)
+            {
+                newMeasure = false;
+                haveOffset = carried && shownL != null;
+                if (haveOffset)
+                {
+                    offL = new float[n]; offC = new float[n]; offM = new float[n];
+                    for (int i = 0; i < n; i++) { offL[i] = shownL[i] - lead[i]; offC[i] = shownC[i] - chord[i]; offM[i] = shownM[i] - mid[i]; }
+                }
+            }
+            if (haveOffset)
+            {
+                float decay = Mathf.Exp(-Time.deltaTime / CarryBlendS), left = 0f;
+                for (int i = 0; i < n; i++)
+                {
+                    lead[i] += offL[i]; chord[i] = Mathf.Max(chord[i] + offC[i], 0.05f); mid[i] += offM[i];
+                    offL[i] *= decay; offC[i] *= decay; offM[i] *= decay;
+                    left = Mathf.Max(left, Mathf.Abs(offL[i]), Mathf.Abs(offC[i]), Mathf.Abs(offM[i]));
+                }
+                if (left < CarryMinM / 2) haveOffset = false;
+            }
+            float moved = 0f;
+            for (int i = 0; i < n; i++)
+                moved = Mathf.Max(moved, Mathf.Abs(lead[i] - lastShape.LeadingM[i]), Mathf.Abs(chord[i] - lastShape.ChordM[i]), Mathf.Abs(mid[i] - lastShape.MidM[i]));
+            CarriedM = moved;
+            if (moved < CarryMinM)
+            {
+                if (carried) { driver.SetShape(lastShape); carried = false; shownL = null; }
+                return;
+            }
+            WingShape s = lastShape.Copy();
+            s.LeadingM = lead; s.ChordM = chord; s.MidM = mid;
+            driver.SetShape(s);
+            carried = true;
+            shownL = lead; shownC = chord; shownM = mid;
+        }
+
+        // How far the shape was carried on this frame (dev logs).
+        public static float CarriedM;
+
+        void FinishPending()
+        {
+            MeasureJob job = pending;
+            pending = null;
             var timing = System.Diagnostics.Stopwatch.StartNew();
             remeasuring = true;
-            try { built = Measure(v); }
+            try { built = Apply(job); }
             catch (Exception e) { built = false; Debug.Log("[VORTEX] wing vapor: raymarch remeasure failed: " + e.Message); }
             finally { remeasuring = false; }
             if (WingVaporAddon.Verbose)
-                Debug.Log($"[VORTEX] wing vapor: wings moved {moved:F2} m off the measured pose, airframe again in {timing.Elapsed.TotalMilliseconds:F1} ms (outlines {stageMs[0]:F0}, body {stageMs[1]:F0}, airframe {stageMs[2]:F0}, cover {stageMs[3]:F0}, finish {stageMs[4]:F0}) for {v.vesselName}");
+                Debug.Log($"[VORTEX] wing vapor: wings moved {pendingMoved:F2} m off the measured pose, airframe again {1000 * (Time.time - pendingStart):F0} ms later; main thread {job.MainMs + timing.Elapsed.TotalMilliseconds:F1} ms (read {job.MainMs:F1}: outlines {job.OutlineMs:F1}, body {job.BodyMs:F1}, meshes {job.MeshMs:F1}; apply {timing.Elapsed.TotalMilliseconds:F1}), worker {job.BuildMs + job.CoverMs + job.FinishMs:F0} ms (airframe {job.BuildMs:F0} incl. flatten {job.FlattenMs:F0}, cover {job.CoverMs:F0}, size {job.SizeMs:F0}, body {job.BodyBuildMs:F0}, prepare {job.PrepareMs:F0}) for {job.V.vesselName}");
         }
 
         // A piece torn off a craft: debris, or a chunk with nothing to fly it (no command part).
@@ -201,6 +286,7 @@ namespace VortexVapor
             driver.UpstreamMapping = false;
             driver.Humidity = KspBaseline.Humidity;
             driver.OffsetK = KspBaseline.OffsetK;
+            CarryShape();
             driver.Step(input);
             if (driver.Visible)
             {
@@ -408,6 +494,9 @@ namespace VortexVapor
         void Rebuild(Vessel v)
         {
             var timing = System.Diagnostics.Stopwatch.StartNew();
+            pending = null;
+            meshCache = null;
+            lastShape = prevShape = null;
             vessel = v;
             partCount = v.parts.Count;
             partSignature = PartSignature(v);
@@ -426,8 +515,69 @@ namespace VortexVapor
             Debug.Log($"[VORTEX] wing vapor: airframe build {timing.Elapsed.TotalMilliseconds:F1} ms for {v.vesselName}, {partCount} parts, grounded {measuredGrounded}");
         }
 
-        bool Measure(Vessel v)
+        // A measurement in two halves: the Unity reads on the main thread, then the pure airframe build
+        // (on a worker for a re-measure, so the frame does not stall), then the result is applied on the main thread.
+        class MeasureJob
         {
+            public Vessel V;
+            public List<SurfacePolygon> Surfaces;
+            public List<Part> Owners;
+            public readonly List<Part> FlexParts = new List<Part>();
+            public readonly List<Vector3> FlexLocal = new List<Vector3>(), FlexRest = new List<Vector3>();
+            public double NoseX, TailX, Radius, Height, MassG;
+            public List<CraftMeshes.Raw> Meshes;
+            public Quaternion ToCanonical;
+            public Vector3 Origin;
+            public Quaternion Frame;
+            public bool Grounded, Flipped;
+            public int Flags, Pods;
+            public VaporAirframe Airframe;
+            public WingShape Shape;
+            public bool Ok;
+            public Exception Error;
+            public double BuildMs, CoverMs, FinishMs, MainMs, OutlineMs, BodyMs, MeshMs;
+            public float At;
+            public double FlattenMs, SizeMs, BodyBuildMs, PrepareMs;
+            public System.Threading.Tasks.Task Task;
+        }
+
+        MeasureJob pending;
+
+        static void Compute(MeasureJob j)
+        {
+            try
+            {
+                var lap = System.Diagnostics.Stopwatch.StartNew();
+                // The mesh flattening is independent of the airframe fit: they run side by side.
+                var flatten = System.Threading.Tasks.Task.Run(() =>
+                {
+                    var w = System.Diagnostics.Stopwatch.StartNew();
+                    float[] t = Flatten(j.Meshes, j.ToCanonical, j.Origin);
+                    j.FlattenMs = w.Elapsed.TotalMilliseconds;
+                    return t;
+                });
+                j.Ok = AirframeBuilder.Build(j.Surfaces, j.NoseX, j.TailX, j.Radius, j.Height, j.MassG, out j.Airframe, out j.Shape);
+                j.BuildMs = Lap(lap);
+                float[] triangles = flatten.Result;
+                j.Meshes = null;
+                if (!j.Ok) return;
+                j.Shape.Cover = WingCover.Build(triangles, j.Surfaces, j.Airframe.RootSpanM);
+                j.CoverMs = Lap(lap);
+                WingCover.SizeBody(j.Shape.Cover, j.Airframe);
+                j.SizeMs = Lap(lap);
+                if (j.Shape.Cover != null) j.Shape.Cover.BuildBody(j.Shape);
+                j.BodyBuildMs = Lap(lap);
+                KspBaseline.Prepare(j.Shape);
+                j.PrepareMs = Lap(lap);
+                j.FinishMs = j.SizeMs + j.BodyBuildMs + j.PrepareMs;
+            }
+            catch (Exception e) { j.Error = e; }
+        }
+
+        bool Measure(Vessel v, bool background = false)
+        {
+            var main = System.Diagnostics.Stopwatch.StartNew();
+            float measuredAt = Time.time;
             Transform root = v.rootPart.transform;
 
             // Canonical frame from the root part: length axis by part spread, nose toward the pods.
@@ -446,19 +596,16 @@ namespace VortexVapor
             if (pods > 0 && pod < 0) length = -length;
             Vector3 vertical = Vector3.Cross(length, Vector3.right).normalized;
             bool grounded = v.LandedOrSplashed || v.srfSpeed < 30;
-            measuredGrounded = grounded;
-            groundFrameFlipped = grounded && Vector3.Dot(root.TransformDirection(vertical), (Vector3)v.upAxis) < 0;
-            if (groundFrameFlipped) vertical = -vertical;
-            frameLocal = CanonicalFrame.FromAxes(length, vertical);
-            Quaternion rotation = root.rotation * frameLocal;
+            bool flipped = grounded && Vector3.Dot(root.TransformDirection(vertical), (Vector3)v.upAxis) < 0;
+            if (flipped) vertical = -vertical;
+            Quaternion canonicalFrame = CanonicalFrame.FromAxes(length, vertical);
+            Quaternion rotation = root.rotation * canonicalFrame;
             Quaternion toCanonical = Quaternion.Inverse(rotation);
             Vector3 origin = root.position;
             Vector3 upWorld = rotation * Vector3.up;
 
-            flexParts.Clear(); flexLocal.Clear(); flexRest.Clear();
-            poseResidual = 0f; poseDriftSince = -1f; lastMeasureTime = Time.time;
-            wingFlex = Vector2.zero;
-            flexShift = flexTurn = Vector3.zero;
+            var job = new MeasureJob { At = measuredAt, V = v, Frame = canonicalFrame, Grounded = grounded, Flipped = flipped };
+            lastMeasureTime = Time.time;
             var lap = System.Diagnostics.Stopwatch.StartNew();
             var surfaces = new List<SurfacePolygon>();
             var owners = new List<Part>();
@@ -480,7 +627,7 @@ namespace VortexVapor
                     Vector3 world = frame.ToWorld(pf.hull[i]);
                     Vector3 c = toCanonical * (world - origin);
                     poly.X[i] = c.x; poly.Y[i] = c.y; poly.Z[i] = c.z;
-                    flexParts.Add(s.part); flexLocal.Add(s.part.transform.InverseTransformPoint(world)); flexRest.Add(c);
+                    job.FlexParts.Add(s.part); job.FlexLocal.Add(s.part.transform.InverseTransformPoint(world)); job.FlexRest.Add(c);
                 }
                 poly.NormalY = Mathf.Abs(Vector3.Dot(frame.n, upWorld));
                 surfaces.Add(poly);
@@ -518,17 +665,50 @@ namespace VortexVapor
             if (double.IsInfinity(noseX)) return false;
             if (heightWeight > 0) height /= heightWeight;
             stageMs[1] = Lap(lap);
+            job.OutlineMs = stageMs[0]; job.BodyMs = stageMs[1];
 
-            VaporAirframe airframe;
-            WingShape shape;
-            if (!AirframeBuilder.Build(surfaces, noseX, tailX, radius, height, v.GetTotalMass() * 1000.0, out airframe, out shape))
+            job.Surfaces = surfaces; job.Owners = owners; job.Flags = flags; job.Pods = pods;
+            job.NoseX = noseX; job.TailX = tailX; job.Radius = radius; job.Height = height; job.MassG = v.GetTotalMass() * 1000.0;
+            var meshTimer = System.Diagnostics.Stopwatch.StartNew();
+            job.Meshes = Triangles(v, toCanonical);
+            job.MeshMs = meshTimer.Elapsed.TotalMilliseconds;
+            job.ToCanonical = toCanonical; job.Origin = origin;
+            job.MainMs = main.Elapsed.TotalMilliseconds;
+            if (background)
             {
-                Debug.Log($"[VORTEX] wing vapor: raymarch: no wing found on {v.vesselName} ({surfaces.Count} lifting outlines)");
+                job.Task = System.Threading.Tasks.Task.Run(() => Compute(job));
+                pending = job;
+                return built;
+            }
+            Compute(job);
+            return Apply(job);
+        }
+
+        // The finished half, on the main thread: the side check, the canard parts, then the driver takes the new airframe.
+        bool Apply(MeasureJob job)
+        {
+            Vessel v = job.V;
+            if (job.Error != null) throw job.Error;
+            if (!job.Ok)
+            {
+                Debug.Log($"[VORTEX] wing vapor: raymarch: no wing found on {v.vesselName} ({job.Surfaces.Count} lifting outlines)");
                 return false;
             }
-            stageMs[2] = Lap(lap);
+            VaporAirframe airframe = job.Airframe;
+            WingShape shape = job.Shape;
+            List<SurfacePolygon> surfaces = job.Surfaces;
+            List<Part> owners = job.Owners;
+            frameLocal = job.Frame;
+            measuredGrounded = job.Grounded;
+            groundFrameFlipped = job.Flipped;
+            flexParts.Clear(); flexLocal.Clear(); flexRest.Clear();
+            flexParts.AddRange(job.FlexParts); flexLocal.AddRange(job.FlexLocal); flexRest.AddRange(job.FlexRest);
+            poseResidual = 0f; poseDriftSince = -1f;
+            wingFlex = Vector2.zero;
+            flexShift = flexTurn = Vector3.zero;
+            stageMs[0] = job.MainMs; stageMs[1] = 0; stageMs[2] = job.BuildMs; stageMs[3] = job.CoverMs; stageMs[4] = job.FinishMs;
             if (ratioVessel != v) { ratioVessel = v; firstRatio = -1; }
-            double side = LostSide(surfaces, noseX, tailX);
+            double side = LostSide(surfaces, job.NoseX, job.TailX);
             // A pose re-measure must read a change twice before it flips the side: one reading mid-sweep can be off.
             if (remeasuring && side != loggedSideKeep)
             {
@@ -543,17 +723,19 @@ namespace VortexVapor
                 if (airframe.SideKeep != 0) Debug.Log($"[VORTEX] wing vapor: one wing is gone on {v.vesselName}, vapor kept on the {(airframe.SideKeep > 0 ? "+" : "-")} side only (reach {lastSideReach} m)");
                 else Debug.Log($"[VORTEX] wing vapor: side reach {lastSideReach} m on {v.vesselName}");
             }
-            shape.Cover = WingCover.Build(Triangles(v, toCanonical, origin), surfaces, airframe.RootSpanM);
-            stageMs[3] = Lap(lap);
             if (Primary) CanardParts.Clear();
             if (Primary && shape.Canard != null)
                 for (int i = 0; i < owners.Count; i++)
                     if (UnderCanard(shape.Canard, surfaces[i])) CanardParts.Add(owners[i].flightID);
-            WingCover.SizeBody(shape.Cover, airframe);
-            if (shape.Cover != null) shape.Cover.BuildBody(shape);
-            KspBaseline.Prepare(shape);
             driver.SetAirframe(airframe, shape);
-            stageMs[4] = Lap(lap);
+            lastApplyTime = Time.time;
+            // Two measurements of the same wing give its motion, to carry the shape forward to now.
+            bool sameWing = lastShape != null && remeasuring && Math.Abs(lastShape.SemispanM - shape.SemispanM) < 0.05 && job.At - lastShapeAt < 0.6f;
+            prevShape = sameWing ? lastShape : null; prevShapeAt = lastShapeAt;
+            lastShape = shape; lastShapeAt = job.At; newMeasure = true;
+            int flags = job.Flags, pods = job.Pods;
+            bool grounded = job.Grounded;
+            if (remeasuring && !WingVaporAddon.Verbose) return true;
             Debug.Log($"[VORTEX] wing vapor: raymarch airframe for {v.vesselName}: span {airframe.SpanM:F1} m, root chord {airframe.RootChordM:F1} m, "
                       + $"tip chord {airframe.TipChordM:F1} m, sweep {airframe.LeadingEdgeSweepRad * 180 / Math.PI:F0} deg, root at {airframe.RootSpanM:F2} m, "
                       + $"secondary {(shape.Secondary == null ? "none" : (shape.Secondary.IsCanard ? "canard" : "tail") + $" {shape.Secondary.SemispanM * 2:F1} m")}, "
@@ -648,19 +830,27 @@ namespace VortexVapor
         }
 
         // Every visible mesh's triangles in the canonical frame, nine floats each.
-        static float[] Triangles(Vessel v, Quaternion toCanonical, Vector3 origin)
+        // Main thread: the matrices only. The vertices are moved into the craft frame in Flatten, on the worker.
+        List<CraftMeshes.Cached> meshCache;
+
+        List<CraftMeshes.Raw> Triangles(Vessel v, Quaternion toCanonical)
+        {
+            if (meshCache == null) meshCache = CraftMeshes.Collect(v);
+            return CraftMeshes.Snapshot(meshCache, Quaternion.Inverse(toCanonical) * Vector3.up);
+        }
+
+        static float[] Flatten(List<CraftMeshes.Raw> meshes, Quaternion toCanonical, Vector3 origin)
         {
             var list = new List<float>();
-            foreach (CraftMeshes.Surface mesh in CraftMeshes.Read(v, Quaternion.Inverse(toCanonical) * Vector3.up))
+            foreach (CraftMeshes.Raw mesh in meshes)
+            {
+                var verts = new Vector3[mesh.Local.Length];
+                for (int i = 0; i < verts.Length; i++) verts[i] = toCanonical * (mesh.ToWorld.MultiplyPoint3x4(mesh.Local[i]) - origin);
+                foreach (int t in mesh.Triangles)
                 {
-                    Vector3[] verts = mesh.Vertices;
-                    int[] tris = mesh.Triangles;
-                    for (int i = 0; i < verts.Length; i++) verts[i] = toCanonical * (verts[i] - origin);
-                    foreach (int t in tris)
-                    {
-                        list.Add(verts[t].x); list.Add(verts[t].y); list.Add(verts[t].z);
-                    }
+                    list.Add(verts[t].x); list.Add(verts[t].y); list.Add(verts[t].z);
                 }
+            }
             return list.ToArray();
         }
 

@@ -40,6 +40,14 @@ Upgrading from 1.5 with the optional **Volumetric Wing Vapor** add-on? Remove th
 
 <br>
 
+## New in 2.1.0
+
+* **Swing wings**: wings that move in flight (Breaking Ground hinges, Infernal Robotics) carry their vapor and wingtip vortices with them, in close to real time and without stalling a frame
+* **Lost wings**: a wing that is torn off or destroyed no longer leaves vapor or a vortex behind, and torn-off pieces draw no effects
+* Everything else in the [changelog](CHANGELOG.md)
+
+<br>
+
 ## New in 2.0.0
 
 * **Raymarched wing vapor**: the vapor is now one soft volume over the wings, ported from [aeronautic](https://github.com/Romainlg29/aeronautic). It stands up from the skin as the pull tightens, follows the angle of attack in a cobra, draws LEX ropes off strakes and spreads over the fuselage in the hardest pulls

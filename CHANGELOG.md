@@ -6,22 +6,21 @@ All notable changes to KSP Wingtip Vortex.
 
 ## 2.1.0 — Moving and breaking wings
 
+### Added
+
+* **Swing wings (Breaking Ground hinges, Infernal Robotics).** The wing vapor is measured again when the wings move away from the pose it was built at, so it follows the sweep. Before, it kept the shape the craft had when the flight began.
+* **Close to real time.** The new airframe is built on a worker thread, so a sweep no longer stalls a frame: the main thread spends about 5 ms per update, down from about 95 ms. The vapor catches up with the wing in about 70 ms instead of up to 0.75 s. Between measurements the wing shape is carried forward by the wing's own motion, and the step to each new measurement is eased out, so the vapor follows a sweep without stepping. Updates run back to back while the wings keep moving; a first update needs the wing to sit 0.1 m off the measured pose for 0.05 s, so ordinary flex does not trigger one.
+* **Wingtip vortices follow a swinging wing.** A vortex anchor whose wing turns more than 1.5 degrees against the root part is re-taken at its current position, so the tip rope leaves the wing tip and not the place it was.
+
 ### Fixed
 
-* **Swing wings (Breaking Ground hinges, Infernal Robotics).** The wing vapor is measured again when the wings move away from the pose it was built at, so it follows the sweep. Before, it kept the shape from the start of the flight. The new airframe is built on a worker thread, so the sweep no longer stalls a frame (the main thread spends about 5 ms per update, down from about 95 ms), and the vapor catches up with the wing in about 70 ms instead of up to 0.75 s. Between measurements the wing shape is carried forward by the wing's own motion, and the step to each new measurement is eased out, so the vapor follows a sweep without stepping.
-* **Wingtip vortices follow a swinging wing.** A vortex anchor whose wing turns more than 1.5 degrees against the root part is re-taken at its current position, so the tip rope leaves the wing tip and not the place it was.
 * **Broken parts.** The vapor is measured again when the set of parts changes, not only their count. A lost wing's vortex fades out over 1.5 s from the tip instead of being cut or redrawn where the wing was.
 * **No vapor where a wing used to be.** The vapor airframe is mirrored from one wing, so a craft that lost a wing kept drawing vapor over the empty air. When one side's wing reach is under 45% of the other's, or under 85% of the ratio the craft started with (the stabilisers are not counted), the wing, edge, tip and canard vapor now fades out past the root on the lost side. A change found while flying must be read twice, so one odd reading mid-sweep cannot blank a side.
-* **Tail surfaces and elevators never carry a vortex.** Aft surfaces are remembered as tail by part ID, so a fresh controller on a damaged craft, or a tail section that broke off, cannot pick an elevator as the "wing". A craft loaded already damaged falls back to treating the aft quarter as tail when something else is left on that side.
-
+* **A lost wing leaves its side bare of vortices.** Under the same rule, that side has no vortex, so a stump such as a wing root or strake no longer carries a full-strength one, and the surviving side is not mirrored over. A wing missing only its last few percent keeps a vortex from the end of what is left.
+* **Tail surfaces and elevators never carry a vortex.** Aft surfaces are remembered as tail by part ID, so a fresh controller on a damaged craft, or a tail section that broke off, cannot pick an elevator as the wing. A craft loaded already damaged falls back to treating the aft quarter as tail when something else is left on that side.
 * **Nothing forms on a torn-off piece.** A piece that is debris, a dropped part, a kerbal, or a chunk with no command part (cockpit or probe core) gets no wing vapor and no vortices, from the first frame it exists. Before, only the vortices were filtered, and a detached wing could draw vapor until the next scan.
-* **A lost wing leaves its side bare of vortices.** When one side's wing reach is under 45% of the other's, or after a loss under 85% of the ratio the craft started with, that side has no vortex, so a stump such as a wing root or strake no longer carries a full-strength one, and the surviving side is not mirrored over. A wing missing only its last few percent keeps a vortex from the end of what is left.
 
-### Checked on the F-14 Tomcat (swing wing, hinge range 59 degrees)
-
-* With the wing swung the full range and held fully swept back, the drawn vortex stays within 0.22 m of the real wingtip during the swing and 0.06 to 0.09 m once held; the vapor airframe stays within about 1 m while moving and 0.17 m when held. Without the fix the vapor was up to 7.1 m off the wing, the vortex about 4 m, and still 0.4 m off held swept back.
-* The vapor airframe is re-measured at most every 0.5 s while the wing keeps moving (about 90 to 150 ms each on a 174-part craft).
-* Wing torn off in flight, with the vapor and vortex on the right wing's side bare and the torn-off piece clean: F-14 Tomcat, SR-71A, Su-27P Flanker, Su-57 Felon NEW and Soy, F-16C trailer craft. F-15EX and F-22A NEW (their root stumps reach 60% and 74% of the intact wing). Only the F-14 is a real swing wing; the other servo crafts in the sandbox did not carry a wing on their hinges.
+---
 
 ## 2.0.0 — Raymarched vapor
 

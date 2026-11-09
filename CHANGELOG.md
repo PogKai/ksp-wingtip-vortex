@@ -4,6 +4,14 @@ All notable changes to KSP Wingtip Vortex.
 
 ---
 
+## 2.1.1 — Volumetric vapor on macOS
+
+### Fixed
+
+* **macOS now gets the raymarched vapor.** The vapor shader asked for shader model 4.5, which macOS OpenGL (limited to GL 4.1) cannot supply, so Unity rejected it and the mod fell back to the legacy puffs. The shader now carries a second SubShader at shader model 4.0 that macOS OpenGL uses; Windows, Linux and Metal keep the 4.5 one.
+
+---
+
 ## 2.1.0 — Moving and breaking wings
 
 ### Added

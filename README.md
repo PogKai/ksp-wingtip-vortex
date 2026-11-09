@@ -40,6 +40,12 @@ Upgrading from 1.5 with the optional **Volumetric Wing Vapor** add-on? Remove th
 
 <br>
 
+## New in 2.1.1
+
+* **Volumetric vapor on Mac**: macOS (OpenGL) used to fall back to the legacy puffs because the vapor shader needed a newer shader model than it offers; it now gets the full raymarched vapor
+
+<br>
+
 ## New in 2.1.0
 
 * **Swing wings**: wings that move in flight (Breaking Ground hinges, Infernal Robotics) carry their vapor and wingtip vortices with them, in close to real time and without stalling a frame

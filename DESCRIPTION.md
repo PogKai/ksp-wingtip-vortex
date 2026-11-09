@@ -2,7 +2,7 @@
 
 A Kerbal Space Program 1.12.x mod that adds physics-driven **wingtip vortices, atmospheric contrails and raymarched wing vapor** to aircraft.
 
-**Current version: 2.0.0** · KSP 1.12.x · no dependencies
+**Current version: 2.1.1** · KSP 1.12.x · no dependencies
 
 ---
 

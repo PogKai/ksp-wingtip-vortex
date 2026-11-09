@@ -9,6 +9,7 @@ Shader "WingtipVortex/WingVapor"
         _VaporTable ("Condensation table", 2D) = "black" {}
         _VaporShape ("Wing tables", 2D) = "black" {}
     }
+    // Shader model 4.5 where the GPU supports it; macOS OpenGL (GL 4.1) takes the 4.0 copy.
     SubShader
     {
         Tags { "Queue" = "Transparent+50" "RenderType" = "Transparent" "IgnoreProjector" = "True" }
@@ -23,6 +24,24 @@ Shader "WingtipVortex/WingVapor"
             #pragma vertex vert
             #pragma fragment frag
             #pragma target 4.5
+            #include "WingVaporField.cginc"
+            ENDCG
+        }
+    }
+    SubShader
+    {
+        Tags { "Queue" = "Transparent+50" "RenderType" = "Transparent" "IgnoreProjector" = "True" }
+        Pass
+        {
+            Cull Front
+            ZWrite Off
+            ZTest Always
+            Blend One OneMinusSrcAlpha
+
+            CGPROGRAM
+            #pragma vertex vert
+            #pragma fragment frag
+            #pragma target 4.0
             #include "WingVaporField.cginc"
             ENDCG
         }

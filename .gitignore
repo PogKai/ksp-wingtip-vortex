@@ -53,6 +53,7 @@
 !/docs/images/
 /docs/images/*
 !/docs/images/banner.jpg
+!/docs/images/combat-vortex-dusk.jpg
 
 *.py
 *.pdb

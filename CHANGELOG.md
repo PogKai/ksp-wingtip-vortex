@@ -4,6 +4,30 @@ All notable changes to KSP Wingtip Vortex.
 
 ---
 
+## 2.2.0 — High-altitude contrail sliders and combat fixes
+
+### Added
+
+* **High-altitude contrail settings, a group of their own in the in-flight window** (app-launcher button or Alt+V). Before, the contrails that form in cold air had no controls. A new **High-altitude contrails** toggle, with four sliders from 0 to 200% (100% is the default look):
+  * **Strength**: how visible the contrail is.
+  * **Length**: how long it hangs behind the aircraft (shortest 20%, longest twice the default).
+  * **Width**: how wide it grows.
+  * **Starts**: where the contrail begins. The window shows about how many kilometres up that is on the body you are flying; dragging right starts it higher, in colder air, and left lower, in warmer air (the warm edge of the temperature band moves by up to 15 K).
+  The toggle off keeps the maneuver vortices at every altitude. The values are saved to `PluginData/settings.cfg` (`contrailEnabled`, `contrailStrength`, `contrailLength`, `contrailWidth`, `contrailStart`); an older settings file keeps working, and the defaults draw exactly what 2.1.1 drew.
+* The `[VORTEX] contrail band on <body>` line in `KSP.log` now also lists the contrail settings in use.
+
+### Fixed
+
+* **The wing vapor no longer restarts from zero when a part it is not built from leaves the craft.** A released missile or a dropped tank changed the part count, which rebuilt the airframe and reset the vapor in the air to nothing in one frame, even at full load. The vapor is now rebuilt only when the lifting surfaces, command pods or flags change; any other change carries on the vapor that is already in the air.
+* **A craft shot apart no longer draws long ribbons and loops.** The vortex strength is scaled by the measured wingspan, so a wreck that had lost its wings (span near 1.8 m) while some lift was still counted gave a swirl of about 190 where an intact craft peaks near 1, and the wake went into full breakdown on the wreck. The wake now fades out as the craft falls below 60% of the widest span seen in flight and is off at 35%.
+
+### Known limits
+
+* The span gate was written for one observed breakup and has not yet been tested against a jet shot completely apart; its thresholds (35% and 60%) are first guesses.
+* The contrail sliders are new in this release: they are built and the defaults are unchanged from 2.1.1, but they have had little flying time at altitude, so please report anything odd at the extremes (0% or 200%).
+
+---
+
 ## 2.1.1 — Volumetric vapor on macOS
 
 ### Fixed

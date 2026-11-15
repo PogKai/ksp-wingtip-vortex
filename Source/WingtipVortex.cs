@@ -10,7 +10,7 @@ using System.Collections.Generic;
 // whole life.
 public class WingtipVortex : MonoBehaviour
 {
-    public const string ModVersion = "2.1.1";
+    public const string ModVersion = "2.2.0";
 
     // The craft this controller draws. Set by the manager immediately after AddComponent, which
     // is before Start() runs.

@@ -40,6 +40,14 @@ Upgrading from 1.5 with the optional **Volumetric Wing Vapor** add-on? Remove th
 
 <br>
 
+## New in 2.2.0
+
+* **High-altitude contrail sliders**: the in-flight window gets a **High-altitude contrails** group with a toggle and four sliders, Strength, Length, Width and Starts (about how many kilometres up they begin on the body you are flying), each 0 to 200%
+* **Missile release**: the wing vapor no longer restarts from zero when a missile or tank leaves the craft
+* **Wrecks**: a jet shot apart no longer draws long ribbons and loops; its wake fades as it loses its span
+
+<br>
+
 ## New in 2.1.1
 
 * **Volumetric vapor on Mac**: macOS (OpenGL) used to fall back to the legacy puffs because the vapor shader needed a newer shader model than it offers; it now gets the full raymarched vapor
@@ -70,7 +78,7 @@ Both effects are limited by air density, not height, so the limits fall at a dif
 
 * **Vortices** are drawn at full strength down to the ground and in every part of the atmosphere with air density of 0.10 kg/m³ or more (roughly 15 km on Kerbin). Above that they fade out, and are gone entirely at 0.01 kg/m³ (roughly 25 km), so nothing is drawn in orbit
 * **Wing vapor** only forms in the lower atmosphere: below 10% of the body's sea-level air density (about 14 km on Kerbin). Above that there is a hard cutoff, with no vapor and no cost. It also needs a real pull in humid low air
-* **High-altitude contrails** need cold air, so on each body they appear only inside the band of temperatures it actually has (see the `[VORTEX] contrail band on <body>` line in `KSP.log`)
+* **High-altitude contrails** need cold air, so on each body they appear only inside the band of temperatures it actually has (see the `[VORTEX] contrail band on <body>` line in `KSP.log`). Their strength, length, width and starting height can be changed in the in-flight window
 
 <br>
 
@@ -78,7 +86,7 @@ Both effects are limited by air density, not height, so the limits fall at a dif
 
 * Works with **stock aerodynamics** or **Ferram Aerospace Research** (tested with FAR 0.16.2), detected automatically
 * Works alongside Scatterer, EVE, Parallax, Deferred, Singularity and Kopernicus
-* **In-game settings:** in flight, click the vortex button on the app launcher (or press **Alt+V**) to switch the wingtip vortices and the wing vapor on or off, set the vortex strength and the vapor's density and height from 0 to 200%, or switch the vapor back to the legacy particle puffs. 100% is the default look. Choices are saved to `PluginData/settings.cfg` in the mod's folder
+* **In-game settings:** in flight, click the vortex button on the app launcher (or press **Alt+V**) to switch the wingtip vortices and the wing vapor on or off, set the vortex strength and the vapor's density and height from 0 to 200%, switch the vapor back to the legacy particle puffs, or switch the high-altitude contrails on or off and set their strength, length, width and where they start, also from 0 to 200%. 100% is the default look. Choices are saved to `PluginData/settings.cfg` in the mod's folder
 
 <br>
 

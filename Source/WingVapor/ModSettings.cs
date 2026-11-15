@@ -13,8 +13,16 @@ namespace VortexVapor
         public const float MaxIntensity = 2f;
 
         static bool loaded;
-        static bool vortexOn = true, vaporOn = true, vaporSheet = true;
+        static bool vortexOn = true, vaporOn = true, vaporSheet = true, contrailOn = true;
         static float vortexIntensity = 1f, vaporIntensity = 1f, sheetDepth = 1f;
+        static float contrailStrength = 1f, contrailLength = 1f, contrailWidth = 1f, contrailStart = 1f;
+
+        // The high-altitude contrail regime by ambient temperature: fully developed at or below Cold,
+        // none above Warm; the band never narrows below BandMin. Per body, the band is lifted to what
+        // the atmosphere can reach (ContrailBand).
+        public const float ContrailTempWarmK = 253f, ContrailTempColdK = 233f, ContrailBandMinK = 12f;
+        // Start = 0% moves the warm edge up this far (contrails start lower), 200% moves it down.
+        public const float ContrailStartRangeK = 15f;
 
         // Set by the setters; the window saves shortly after the last change.
         public static bool Dirty;
@@ -34,14 +42,25 @@ namespace VortexVapor
         public static bool VaporSheet { get { Ensure(); return vaporSheet; } set { Ensure(); if (vaporSheet != value) { vaporSheet = value; Touch(); } } }
         public static float SheetDepth { get { Ensure(); return sheetDepth; } set { Ensure(); value = Clamp(value); if (sheetDepth != value) { sheetDepth = value; Touch(); } } }
 
+        // High-altitude contrails, a group of their own: on/off, then multipliers of the default look.
+        public static bool ContrailOn { get { Ensure(); return contrailOn; } set { Ensure(); if (contrailOn != value) { contrailOn = value; Touch(); } } }
+        public static float ContrailStrength { get { Ensure(); return contrailStrength; } set { Ensure(); value = Clamp(value); if (contrailStrength != value) { contrailStrength = value; Touch(); } } }
+        public static float ContrailLength { get { Ensure(); return contrailLength; } set { Ensure(); value = Clamp(value); if (contrailLength != value) { contrailLength = value; Touch(); } } }
+        public static float ContrailWidth { get { Ensure(); return contrailWidth; } set { Ensure(); value = Clamp(value); if (contrailWidth != value) { contrailWidth = value; Touch(); } } }
+        public static float ContrailStart { get { Ensure(); return contrailStart; } set { Ensure(); value = Clamp(value); if (contrailStart != value) { contrailStart = value; Touch(); } } }
+
+        // Kelvin the warm edge of the band moves by: positive when contrails are set to start lower.
+        public static float ContrailStartShiftK { get { Ensure(); return (1f - contrailStart) * ContrailStartRangeK; } }
+
         static float Clamp(float v) { return Mathf.Clamp(v, 0f, MaxIntensity); }
         static void Touch() { Dirty = true; ChangedAt = Time.unscaledTime; }
 
         public static void ResetToDefaults()
         {
             Ensure();
-            vortexOn = vaporOn = vaporSheet = true;
+            vortexOn = vaporOn = vaporSheet = contrailOn = true;
             vortexIntensity = vaporIntensity = sheetDepth = 1f;
+            contrailStrength = contrailLength = contrailWidth = contrailStart = 1f;
             Touch();
         }
 
@@ -61,6 +80,11 @@ namespace VortexVapor
                 vaporIntensity = Clamp(ReadFloat(node, "vaporIntensity", 1f));
                 vaporSheet = ReadBool(node, "vaporSheet", true);
                 sheetDepth = Clamp(ReadFloat(node, "sheetDepth", 1f));
+                contrailOn = ReadBool(node, "contrailEnabled", true);
+                contrailStrength = Clamp(ReadFloat(node, "contrailStrength", 1f));
+                contrailLength = Clamp(ReadFloat(node, "contrailLength", 1f));
+                contrailWidth = Clamp(ReadFloat(node, "contrailWidth", 1f));
+                contrailStart = Clamp(ReadFloat(node, "contrailStart", 1f));
             }
             catch (Exception e) { Debug.Log("[VORTEX] settings: could not read, using defaults: " + e.Message); }
         }
@@ -80,9 +104,64 @@ namespace VortexVapor
                 node.AddValue("vaporIntensity", vaporIntensity.ToString("F2", CultureInfo.InvariantCulture));
                 node.AddValue("vaporSheet", vaporSheet.ToString());
                 node.AddValue("sheetDepth", sheetDepth.ToString("F2", CultureInfo.InvariantCulture));
+                node.AddValue("contrailEnabled", contrailOn.ToString());
+                node.AddValue("contrailStrength", contrailStrength.ToString("F2", CultureInfo.InvariantCulture));
+                node.AddValue("contrailLength", contrailLength.ToString("F2", CultureInfo.InvariantCulture));
+                node.AddValue("contrailWidth", contrailWidth.ToString("F2", CultureInfo.InvariantCulture));
+                node.AddValue("contrailStart", contrailStart.ToString("F2", CultureInfo.InvariantCulture));
                 node.Save(path);
             }
             catch (Exception e) { Debug.Log("[VORTEX] settings: could not save: " + e.Message); }
+        }
+
+        // The contrail band of a body in kelvin: the coldest air its temperature curve reaches lifts the cold
+        // edge, so the band is reachable; non-positive samples are discarded (rescale mods can leave the
+        // curve undefined at the top).
+        public static void ContrailBand(CelestialBody body, out float cold, out float warm, out float minT, out float maxT)
+        {
+            cold = ContrailTempColdK; warm = ContrailTempWarmK; minT = ContrailTempColdK; maxT = ContrailTempWarmK;
+            if (body == null || !body.atmosphere) return;
+            double depth = body.atmosphereDepth;
+            float lo = float.MaxValue, hi = float.MinValue;
+            for (int s = 0; s <= 48; s++)
+            {
+                float t = (float)body.GetTemperature(depth * s / 48.0);
+                if (t <= 1f || float.IsNaN(t) || float.IsInfinity(t)) continue;
+                if (t < lo) lo = t;
+                if (t > hi) hi = t;
+            }
+            if (lo == float.MaxValue) { lo = ContrailTempColdK; hi = ContrailTempWarmK; }
+            minT = lo; maxT = hi;
+            cold = Mathf.Max(ContrailTempColdK, lo);
+            warm = Mathf.Max(ContrailTempWarmK, cold + ContrailBandMinK);
+        }
+
+        // The warm edge actually used: the body's, moved by the Start setting, never closer to the cold edge than BandMin.
+        public static float ContrailWarmEdge(float cold, float bodyWarm)
+        {
+            return Mathf.Max(bodyWarm + ContrailStartShiftK, cold + ContrailBandMinK);
+        }
+
+        // About how high (km above sea level) contrails begin on this body with the current Start setting; -1 when the
+        // air never gets that cold, NaN without an atmosphere. Cached until the body or the setting changes.
+        static CelestialBody startBody;
+        static float startFor = -1f, startKm;
+        public static float ContrailStartKm(CelestialBody body)
+        {
+            if (body == null || !body.atmosphere) return float.NaN;
+            Ensure();
+            if (body == startBody && contrailStart == startFor) return startKm;
+            startBody = body; startFor = contrailStart; startKm = -1f;
+            float cold, warm, lo, hi;
+            ContrailBand(body, out cold, out warm, out lo, out hi);
+            float edge = ContrailWarmEdge(cold, warm);
+            double depth = body.atmosphereDepth;
+            for (int s = 0; s <= 400; s++)
+            {
+                double h = depth * s / 400.0;
+                if (body.GetTemperature(h) <= edge) { startKm = (float)(h / 1000.0); break; }
+            }
+            return startKm;
         }
 
         // Next to the Plugins folder, like verbose.txt.
@@ -207,6 +286,15 @@ namespace VortexVapor
             GUI.enabled = wasEnabled;
             if (Legacy && ModSettings.VaporOn) GUILayout.Label("The older puff effect, in place of the raymarched vapor.", note);
 
+            GUILayout.Space(8f);
+            ModSettings.ContrailOn = GUILayout.Toggle(ModSettings.ContrailOn, " <b>High-altitude contrails</b>", heading);
+            bool contrails = ModSettings.ContrailOn;
+            ModSettings.ContrailStrength = IntensityRow("Strength", ModSettings.ContrailStrength, contrails);
+            ModSettings.ContrailLength = IntensityRow("Length", ModSettings.ContrailLength, contrails);
+            ModSettings.ContrailWidth = IntensityRow("Width", ModSettings.ContrailWidth, contrails);
+            ModSettings.ContrailStart = IntensityRow("Starts", ModSettings.ContrailStart, contrails);
+            if (contrails) GUILayout.Label(StartNote(), note);
+
             GUILayout.Space(10f);
             GUILayout.BeginHorizontal();
             if (GUILayout.Button("Defaults")) ModSettings.ResetToDefaults();
@@ -220,6 +308,16 @@ namespace VortexVapor
         }
 
         GUIStyle heading, note;
+
+        // Where contrails begin on the body being flown, so the Starts slider reads in kilometres.
+        static string StartNote()
+        {
+            CelestialBody body = FlightGlobals.currentMainBody;
+            float km = ModSettings.ContrailStartKm(body);
+            if (float.IsNaN(km)) return "No atmosphere here, so no contrails.";
+            if (km < 0f) return "The air on " + body.bodyName + " never gets cold enough for contrails at this setting.";
+            return "Contrails begin at about " + km.ToString("F1", CultureInfo.InvariantCulture) + " km on " + body.bodyName + "; drag right to start higher.";
+        }
         static bool Legacy { get { return !ModSettings.VaporSheet; } }
 
         // 0 to MaxIntensity in 5% steps, snapping to 100%; greyed out while its effect is off.

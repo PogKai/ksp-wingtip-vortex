@@ -200,10 +200,9 @@ public class WingtipVortex : MonoBehaviour
     private float abnormalFrameThreshold = 0.20f;
     private const float stallDelta = 0.5f;   // s; a frame this long restarts the trails
 
-    // High-altitude contrail regime by ambient temperature, per body (RefreshContrailBand).
-    private float contrailTempWarm = 253f;   // K: above this, no persistent contrail
-    private float contrailTempCold = 233f;   // K: at or below this, fully developed
-    private float contrailBandMin = 12f;     // K: never let the band collapse to a step
+    // High-altitude contrail regime by ambient temperature, per body (RefreshContrailBand). The band's
+    // constants and the player's contrail settings (on/off, strength, length, width, start) are in
+    // VortexVapor.ModSettings.
 
     // Brightness follows VortexVapor.Sunlight; the night floor keeps the wake faintly visible.
     private float nightFloorScale = 0.20f;   // ambient floor in full shadow
@@ -212,7 +211,7 @@ public class WingtipVortex : MonoBehaviour
     private bool loggedSecondaryGate = false;
     private bool loggedTrailMat = false;
     private CelestialBody contrailBody = null;
-    private float bodyContrailWarm = 253f, bodyContrailCold = 233f;
+    private float bodyContrailWarm = VortexVapor.ModSettings.ContrailTempWarmK, bodyContrailCold = VortexVapor.ModSettings.ContrailTempColdK;
     private float contrailTimeMin = 2.5f;          // trail lifetime at the bottom of the band
     private float contrailTimeMax = 5.0f;          // ...and at the top
     private float contrailMinVertexDist = 1.5f;    // contrails are near-straight; sample coarsely
@@ -416,9 +415,9 @@ public class WingtipVortex : MonoBehaviour
     private float sinkUpdateInterval = 0f;
     private float sinkTimer = 0f;
 
-    // Ring buffer of shed-strength history, replayed by ApplyShedAppearance. 64 * 0.08 s covers
-    // contrailTimeMax.
-    private const int shedSamples = 64;
+    // Ring buffer of shed-strength history, replayed by ApplyShedAppearance. 128 * 0.08 s covers
+    // contrailTimeMax at the longest Length setting (200%).
+    private const int shedSamples = 128;
     private const int shedKeyCount = 8;       // Gradient accepts at most 8 alpha keys
     private float shedSampleInterval = 0.08f;
     private float shedSampleTimer = 0f;
@@ -1050,28 +1049,15 @@ public class WingtipVortex : MonoBehaviour
     void RefreshContrailBand(CelestialBody body)
     {
         contrailBody = body;
-        bodyContrailWarm = contrailTempWarm;
-        bodyContrailCold = contrailTempCold;
+        float minT, maxT;
+        VortexVapor.ModSettings.ContrailBand(body, out bodyContrailCold, out bodyContrailWarm, out minT, out maxT);
         if (body == null || !body.atmosphere) return;
-
-        // Non-positive samples are discarded; rescale mods can leave the curve undefined at the
-        // top.
-        double depth = body.atmosphereDepth;
-        float minT = float.MaxValue, maxT = float.MinValue;
-        for (int s = 0; s <= 48; s++)
-        {
-            float t = (float)body.GetTemperature(depth * s / 48.0);
-            if (t <= 1f || float.IsNaN(t) || float.IsInfinity(t)) continue;
-            if (t < minT) minT = t;
-            if (t > maxT) maxT = t;
-        }
-        if (minT == float.MaxValue) { minT = contrailTempCold; maxT = contrailTempWarm; }
-
-        bodyContrailCold = Mathf.Max(contrailTempCold, minT);
-        bodyContrailWarm = Mathf.Max(contrailTempWarm, bodyContrailCold + contrailBandMin);
         Log($"contrail band on {body.bodyName}: air {minT:F1}-{maxT:F1}K, "
                   + $"band {bodyContrailCold:F1}->{bodyContrailWarm:F1}K, "
-                  + $"rho_ASL {body.atmDensityASL:F3}");
+                  + $"rho_ASL {body.atmDensityASL:F3}; "
+                  + $"settings on={VortexVapor.ModSettings.ContrailOn} strength={VortexVapor.ModSettings.ContrailStrength:F2} "
+                  + $"length={VortexVapor.ModSettings.ContrailLength:F2} width={VortexVapor.ModSettings.ContrailWidth:F2} "
+                  + $"start={VortexVapor.ModSettings.ContrailStart:F2} (warm edge {VortexVapor.ModSettings.ContrailWarmEdge(bodyContrailCold, bodyContrailWarm):F1}K)");
     }
 
     // A part's physical extent from its colliders; effect meshes have none.
@@ -2730,8 +2716,13 @@ public class WingtipVortex : MonoBehaviour
         // transition across trail lifetime, spacing, width, spread and opacity.
         if (contrailBody != vessel.mainBody) RefreshContrailBand(vessel.mainBody);
         float ambientK = (float)vessel.atmosphericTemperature;
-        float contrailBlend = Mathf.Clamp01((bodyContrailWarm - ambientK)
-                                            / Mathf.Max(bodyContrailWarm - bodyContrailCold, 0.01f));
+        float contrailWarm = VortexVapor.ModSettings.ContrailWarmEdge(bodyContrailCold, bodyContrailWarm);
+        float contrailBlend = VortexVapor.ModSettings.ContrailOn
+            ? Mathf.Clamp01((contrailWarm - ambientK) / Mathf.Max(contrailWarm - bodyContrailCold, 0.01f))
+            : 0f;
+        float contrailLen = Mathf.Clamp(VortexVapor.ModSettings.ContrailLength, 0.2f, 2f);
+        float contrailTimeMinNow = contrailTimeMin * contrailLen, contrailTimeMaxNow = contrailTimeMax * contrailLen;
+        float contrailWidthNow = contrailWidthScale * Mathf.Max(VortexVapor.ModSettings.ContrailWidth, 0.1f);
 
         // Approach-vapor floor needs dense air, a wing near its lift limit, and airborne.
         float sunElevation;
@@ -2792,7 +2783,7 @@ public class WingtipVortex : MonoBehaviour
                 if (lowShot) loggedCoreGrowth = true; else loggedCoreGrowthHigh = true;
                 // Wake life this regime gets at a steady frame rate: the lerp of maneuverTimeMax to
                 // contrailTimeMax.
-                float wakeLife = Mathf.Lerp(maneuverTimeMax, contrailTimeMax, contrailBlend);
+                float wakeLife = Mathf.Lerp(maneuverTimeMax, contrailTimeMaxNow, contrailBlend);
                 float gMid = CoreGrowth(wakeLife * 0.5f), gEnd = CoreGrowth(wakeLife);
                 Log($"core growth ({(lowShot ? "low" : "band")}): T={tK:F0}K "
                           + $"rho={rho:F3} cb={contrailBlend:F2} nu={nuRaw:E2} Gamma={gamma:F0}m2/s "
@@ -2829,7 +2820,7 @@ public class WingtipVortex : MonoBehaviour
                 float hEff = Mathf.Max(hV, 0.5f * frameB0);
                 float vOut = gamma / (4f * Mathf.PI) * b0sq / (hEff * (4f * hEff * hEff + b0sq));
                 float w0 = gamma / (2f * Mathf.PI * frameB0);
-                float life = Mathf.Lerp(maneuverTimeMax, contrailTimeMax, contrailBlend);
+                float life = Mathf.Lerp(maneuverTimeMax, contrailTimeMaxNow, contrailBlend);
                 Log($"ground effect: AGL={hV:F1}m (raycast={vessel.heightFromTerrain:F1} "
                           + $"radar={vessel.radarAltitude:F1}) b0={frameB0:F1}m h/b0={hV / frameB0:F2} "
                           + $"factor={frameGroundFac:F2} Gamma={gamma:F0}m2/s | drift={vOut:F2}m/s "
@@ -3032,6 +3023,7 @@ public class WingtipVortex : MonoBehaviour
                                     Mathf.Lerp(0.1f, 0.5f, contrailBlend)
                                     * strengths[i] * atmFactor * nightScale);
                 visible *= Mathf.Lerp(1f, 1.5f, contrailBlend);
+                visible *= Mathf.Lerp(1f, VortexVapor.ModSettings.ContrailStrength, contrailBlend);
             }
 
             if (strengths[i] < 1f)
@@ -3104,7 +3096,7 @@ public class WingtipVortex : MonoBehaviour
             float shutdownK = 1f - Mathf.Exp(-dt / Mathf.Max(wakeShutdownTau, 0.01f));
             float stability = Mathf.Clamp01((abnormalFrameThreshold - rawDelta) / abnormalFrameThreshold);
             float targetTime = Mathf.Lerp(Mathf.Lerp(maneuverTimeMin, maneuverTimeMax, stability),
-                                          Mathf.Lerp(contrailTimeMin, contrailTimeMax, stability),
+                                          Mathf.Lerp(contrailTimeMinNow, contrailTimeMaxNow, stability),
                                           contrailBlend);
 
             // See secondaryWakeLength. Main sources keep the full ribbonMaxLength; a secondary gets
@@ -3217,7 +3209,7 @@ public class WingtipVortex : MonoBehaviour
                     }
                 }
 
-                rb.lastWidth = rScale * Mathf.Lerp(1f, contrailWidthScale, contrailBlend);
+                rb.lastWidth = rScale * Mathf.Lerp(1f, contrailWidthNow, contrailBlend);
                 rb.lastBlend = contrailBlend; rb.lastLife = life; rb.lastInward = Mathf.Clamp01(strengths[i]);
                 BuildRibbonMesh(rb, now, rb.lastWidth, rb.lastBlend, rb.lastLife, rb.lastInward);
             }
@@ -3228,7 +3220,7 @@ public class WingtipVortex : MonoBehaviour
             {
                 float sizeNormT = Mathf.Clamp(vesselSize / 30f, 0.2f, 1f);
                 float ss = 1f + Mathf.Pow(sizeNormT, 2.2f) * 2.0f;
-                float altScale = Mathf.Lerp(1f, contrailWidthScale, contrailBlend);
+                float altScale = Mathf.Lerp(1f, contrailWidthNow, contrailBlend);
                 ApplyShedAppearance(i, tr, trailFade * ss * altScale, contrailBlend, speed);
             }
             // An aged-out trail resets its recorded age span.

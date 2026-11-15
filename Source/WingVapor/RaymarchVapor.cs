@@ -55,7 +55,16 @@ namespace VortexVapor
         public void Prepare(Vessel v)
         {
             if (!Available || v == null || v.rootPart == null) return;
-            if (v != vessel || v.parts.Count != partCount || PartSignature(v) != partSignature) Rebuild(v);
+            bool changed = v != vessel || v.parts.Count != partCount || PartSignature(v) != partSignature;
+            // A part the vapor is not built from came or went (a released missile or tank): the vapor in the air carries on.
+            if (changed && v == vessel && built && VaporPartSignature(v) == vaporSignature)
+            {
+                partCount = v.parts.Count;
+                partSignature = PartSignature(v);
+                meshCache = null;
+                changed = false;
+            }
+            if (changed) Rebuild(v);
             else if (pending != null)
             {
                 if (pending.Task.IsCompleted) FinishPending();
@@ -79,6 +88,21 @@ namespace VortexVapor
             for (int i = 0; i < v.parts.Count; i++) sum += v.parts[i].flightID * 2654435761u;
             return sum;
         }
+
+        // The parts the airframe is measured from: lifting surfaces, command pods (they give the nose) and flags on a wing.
+        static uint VaporPartSignature(Vessel v)
+        {
+            uint sum = 0;
+            for (int i = 0; i < v.parts.Count; i++)
+            {
+                Part p = v.parts[i];
+                if (p.FindModuleImplementing<ModuleLiftingSurface>() != null || p.FindModuleImplementing<ModuleCommand>() != null || IsFlag(p))
+                    sum += p.flightID * 2654435761u;
+            }
+            return sum;
+        }
+
+        uint vaporSignature;
 
         // The wing outlines sit further from the measured pose than the flex fit explains (a swing wing,
         // a broken joint): a first re-measure at PoseDriftM held PoseHoldS, then back to back at the finer
@@ -500,6 +524,7 @@ namespace VortexVapor
             vessel = v;
             partCount = v.parts.Count;
             partSignature = PartSignature(v);
+            vaporSignature = VaporPartSignature(v);
             built = false;
             if (driver == null) driver = new VaporDriver(VaporShaders.Raymarch);
             driver.Reset();

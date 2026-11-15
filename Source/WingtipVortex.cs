@@ -574,6 +574,7 @@ public class WingtipVortex : MonoBehaviour
     private Vector3 axLateral { get { return vesselTransform.TransformDirection(axLateralLocal); } }
     private Vector3 axLength { get { return vesselTransform.TransformDirection(axLengthLocal); } }
     private Vector3 axVert { get { return vesselTransform.TransformDirection(axVertLocal); } }
+    private float spanPeak;   // widest span measured while flying; a shot-apart craft falls far below it
     private float vesselSpan = 16f;   // ExtentAlong(vesselBounds, right) * 2; see massSpanFactor
 
     // Rogue renderer rejection: visual mods give meshes enormous bounds to defeat culling, which
@@ -2697,7 +2698,11 @@ public class WingtipVortex : MonoBehaviour
 
         airborneBlend = Mathf.MoveTowards(airborneBlend, vessel.LandedOrSplashed ? 0f : 1f,
                                           airborneBlendSpeed * dt);
-        float flyingGate = airborneBlend
+        // A craft that has lost most of its span sheds no coherent wake; the span-normalised swirl below
+        // would otherwise blow up on the wreck and draw long ribbons and loops.
+        if (boundsLogged && airborneBlend > 0.5f && vesselSpan > spanPeak) spanPeak = vesselSpan;
+        float spanIntact = spanPeak > 0f ? Mathf.Clamp01((vesselSpan / spanPeak - 0.35f) / 0.25f) : 1f;
+        float flyingGate = airborneBlend * spanIntact
                            * Mathf.Clamp01((speed - flyingSpeedMin)
                                            / Mathf.Max(flyingSpeedFull - flyingSpeedMin, 0.01f));
         float targetIntensity = flyingGate

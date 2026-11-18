@@ -4,6 +4,19 @@ All notable changes to KSP Wingtip Vortex.
 
 ---
 
+## 2.2.1 — Hidden surfaces and airbrakes
+
+### Fixed
+
+* **Lifting surfaces inside a fairing or cargo bay no longer draw wingtip vortices.** A rocket with canards or fins sealed inside a fairing drew vortices off them as if they were out in the air. A surface is now a vortex source only while it is exposed to the airstream, so only the fins on the outside of the fuselage draw them.
+* **Airbrakes no longer draw wingtip vortices.** Stock builds the airbrake on the control-surface module, so it was picked up like a canard or an elevon. Airbrakes are no longer counted as lifting or control surfaces.
+
+### Known limits
+
+* A surface uncovered in flight (a fairing jettisoned, a bay opened) starts drawing vortices only when the craft's lifting surfaces are next detected.
+
+---
+
 ## 2.2.0 — High-altitude contrail sliders and combat fixes
 
 ### Added

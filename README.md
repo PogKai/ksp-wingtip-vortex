@@ -40,6 +40,13 @@ Upgrading from 1.5 with the optional **Volumetric Wing Vapor** add-on? Remove th
 
 <br>
 
+## New in 2.2.1
+
+* **Hidden surfaces**: canards and fins sealed inside a fairing or cargo bay no longer draw wingtip vortices; only surfaces out in the airstream do
+* **Airbrakes**: airbrakes no longer draw wingtip vortices
+
+<br>
+
 ## New in 2.2.0
 
 * **High-altitude contrail sliders**: the in-flight window gets a **High-altitude contrails** group with a toggle and four sliders, Strength, Length, Width and Starts (about how many kilometres up they begin on the body you are flying), each 0 to 200%

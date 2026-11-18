@@ -541,6 +541,7 @@ public class WingtipVortex : MonoBehaviour
     // is not a dependency. Lift and control stay separate, as in stock.
     internal static bool IsLiftPart(Part p)
     {
+        if (IsAirbrake(p)) return false;
         if (p.Modules.Contains("FARWingAerodynamicModel")) return true;
         foreach (PartModule m in p.Modules) if (m is ModuleLiftingSurface && !(m is ModuleControlSurface)) return true;
         return false;
@@ -548,12 +549,21 @@ public class WingtipVortex : MonoBehaviour
 
     internal static bool IsControlPart(Part p)
     {
+        if (IsAirbrake(p)) return false;
         if (p.Modules.Contains("FARControllableSurface")) return true;
         foreach (PartModule m in p.Modules) if (m is ModuleControlSurface) return true;
         return false;
     }
 
     internal static bool IsAeroSurface(Part p) { return IsLiftPart(p) || IsControlPart(p); }
+
+    // Stock airbrakes are ModuleAeroSurface, a ModuleControlSurface subclass, and shed no tip
+    // vortex.
+    internal static bool IsAirbrake(Part p)
+    {
+        foreach (PartModule m in p.Modules) if (m is ModuleAeroSurface) return true;
+        return false;
+    }
 
     // Low-pass on the lift measurement, not the build/decay rates: raw liftForce is noisy from
     // joint flex. 0.12 s still reads a real unload as immediate.
@@ -1605,8 +1615,9 @@ public class WingtipVortex : MonoBehaviour
         {
             if (p == null) continue;
 
-            // Only lifting surfaces.
+            // Only lifting surfaces exposed to the airstream (not inside a fairing or cargo bay).
             if (!IsAeroSurface(p)) continue;
+            if (p.ShieldedFromAirstream) continue;
 
             // Same rejection as the vessel measurement, so a cull-defeating renderer cannot win a
             // slot.
@@ -2410,7 +2421,7 @@ public class WingtipVortex : MonoBehaviour
                 foreach (var part in vessel.parts)
                 {
                     Bounds rrB;
-                    if (!(IsLiftPart(part) || IsControlPart(part)) || !TryGetPartBounds(part, out rrB)) continue;
+                    if (!IsAeroSurface(part) || part.ShieldedFromAirstream || !TryGetPartBounds(part, out rrB)) continue;
                     float e = LateralReach(part, rrB);
                     if (e > maxExt) { maxExt = e; widest = part; }
                 }
@@ -2455,8 +2466,8 @@ public class WingtipVortex : MonoBehaviour
                 bool isLift = IsLiftPart(p);
                 bool isControl = IsControlPart(p);
 
-                // Only real lifting surfaces.
-                if (!isLift) continue;
+                // Only real, exposed lifting surfaces.
+                if (!isLift || p.ShieldedFromAirstream) continue;
 
                 // Never re-select the part being stood on.
                 if (p == currentPart) continue;

@@ -89,14 +89,20 @@ namespace VortexVapor
             return sum;
         }
 
-        // The parts the airframe is measured from: lifting surfaces, command pods (they give the nose) and flags on a wing.
+        // A part that lets someone or something fly the craft: a command module or an external seat.
+        public static bool IsControlPart(Part p)
+        {
+            return p != null && (p.FindModuleImplementing<ModuleCommand>() != null || p.FindModuleImplementing<KerbalSeat>() != null);
+        }
+
+        // The parts the airframe is measured from: lifting surfaces, control parts (they give the nose) and flags on a wing.
         static uint VaporPartSignature(Vessel v)
         {
             uint sum = 0;
             for (int i = 0; i < v.parts.Count; i++)
             {
                 Part p = v.parts[i];
-                if (p.FindModuleImplementing<ModuleLiftingSurface>() != null || p.FindModuleImplementing<ModuleCommand>() != null || IsFlag(p))
+                if (p.FindModuleImplementing<ModuleLiftingSurface>() != null || IsControlPart(p) || IsFlag(p))
                     sum += p.flightID * 2654435761u;
             }
             return sum;
@@ -261,16 +267,14 @@ namespace VortexVapor
             if (!HideBrokenOff) return false;
             switch (v.vesselType)
             {
-                case VesselType.Debris:
-                case VesselType.DroppedPart:
                 case VesselType.EVA:
                 case VesselType.Flag:
                 case VesselType.SpaceObject:
-                case VesselType.Unknown:
                     return true;
             }
+            // Any craft with a control part is flyable whatever its vessel type says.
             for (int i = 0; i < v.parts.Count; i++)
-                if (v.parts[i] != null && v.parts[i].Modules.Contains("ModuleCommand")) return false;
+                if (IsControlPart(v.parts[i])) return false;
             return true;
         }
 
@@ -614,7 +618,7 @@ namespace VortexVapor
             int pods = 0;
             foreach (Part p in v.parts)
             {
-                if (p.FindModuleImplementing<ModuleCommand>() == null) continue;
+                if (!IsControlPart(p)) continue;
                 pod += Vector3.Dot(p.transform.position - centroid, root.TransformDirection(length));
                 pods++;
             }

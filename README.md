@@ -40,6 +40,12 @@ Upgrading from 1.5 with the optional **Volumetric Wing Vapor** add-on? Remove th
 
 <br>
 
+## New in 2.2.2
+
+* **Seat-controlled and drone craft**: a craft flown from an external command seat, or by a probe core, now gets wingtip vortices and wing vapor; only debris with no control part is skipped
+
+<br>
+
 ## New in 2.2.1
 
 * **Hidden surfaces**: canards and fins sealed inside a fairing or cargo bay no longer draw wingtip vortices; only surfaces out in the airstream do

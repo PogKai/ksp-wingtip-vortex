@@ -4,6 +4,15 @@ All notable changes to KSP Wingtip Vortex.
 
 ---
 
+## 2.2.2 — Seat-controlled and drone craft
+
+### Fixed
+
+* **Craft flown from an external command seat now get wingtip vortices and wing vapor.** A craft with no command pod was treated as torn-off debris and drew nothing. Any craft with a control part, a command module (cockpit, capsule or probe core, so crewed and drone craft alike) or an external seat, now counts as flyable.
+* **A flyable craft is no longer skipped because of its vessel type.** A craft with a control part that KSP had typed as debris, a dropped part or unknown now draws vortices and vapor too. Debris and chunks with no control part still draw nothing.
+
+---
+
 ## 2.2.1 — Hidden surfaces and airbrakes
 
 ### Fixed

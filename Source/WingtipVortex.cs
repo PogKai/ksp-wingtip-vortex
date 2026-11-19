@@ -10,7 +10,7 @@ using System.Collections.Generic;
 // whole life.
 public class WingtipVortex : MonoBehaviour
 {
-    public const string ModVersion = "2.2.1";
+    public const string ModVersion = "2.2.2";
 
     // The craft this controller draws. Set by the manager immediately after AddComponent, which
     // is before Start() runs.
@@ -995,7 +995,7 @@ public class WingtipVortex : MonoBehaviour
         int podCount = 0;
         foreach (Part p in vessel.parts)
         {
-            if (p == null || !p.Modules.Contains("ModuleCommand")) continue;
+            if (!VortexVapor.RaymarchVapor.IsControlPart(p)) continue;
             podZ += Vector3.Dot(p.transform.position - vesselTransform.position, axLength);
             podCount++;
         }
@@ -3547,14 +3547,11 @@ public class WingtipVortexManager : MonoBehaviour
         if (!v.loaded || v.packed || v.parts == null || v.parts.Count == 0) return false;
         switch (v.vesselType)
         {
-            case VesselType.Debris:
             case VesselType.EVA:
             case VesselType.Flag:
             case VesselType.SpaceObject:
-            case VesselType.Unknown:
             case VesselType.DeployedScienceController:
             case VesselType.DeployedSciencePart:
-            case VesselType.DroppedPart:
                 return false;
         }
         if (VortexVapor.RaymarchVapor.BrokenOff(v)) return false;
